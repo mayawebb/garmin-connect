@@ -1,0 +1,7 @@
+pandas>=2.2,<3.0
+plotly>=5.24,<7.0
+streamlit>=1.52,<2.0
+pytest>=8.0,<9.0
+python-dotenv>=1.0,<2.0
+requests>=2.32,<3.0
+garmin-fit-sdk>=21.218,<22.0

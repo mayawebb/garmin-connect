@@ -1,0 +1,21 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Local databases and imported data
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Python
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Streamlit local state
+.streamlit/secrets.toml
