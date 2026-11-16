@@ -131,7 +131,8 @@ function trainingStory(weeks, runs) {
   const recentKm = average(recent.map((w) => w.distance)); const priorKm = average(prior.map((w) => w.distance));
   const recentRuns = recent.reduce((sum, w) => sum + w.runs, 0); const priorRuns = prior.reduce((sum, w) => sum + w.runs, 0);
   const change = priorKm > 0 ? Math.round((recentKm / priorKm - 1) * 100) : null;
-  const recentLength = recentKm / Math.max(recentRuns, 1); const priorLength = priorKm / Math.max(priorRuns, 1);
+  const recentLength = recentRuns ? recent.reduce((sum, week) => sum + week.distance, 0) / recentRuns : 0;
+  const priorLength = priorRuns ? prior.reduce((sum, week) => sum + week.distance, 0) / priorRuns : 0;
   const direction = change === null ? "" : change > 3 ? `up ${change}%` : change < -3 ? `down ${Math.abs(change)}%` : "about level";
   return `Across the last four complete weeks, average running volume was ${recentKm.toFixed(1)} km/week (${direction}) versus ${priorKm.toFixed(1)} km/week in the previous block. You logged ${recentRuns} runs versus ${priorRuns}; average distance per run moved from ${priorLength.toFixed(1)} to ${recentLength.toFixed(1)} km.`;
 }
@@ -151,7 +152,7 @@ function renderActivityMix(activities) {
 function prettifyType(type) { return String(type || "Activity").replace(/_/g, " ").replace(/\b\w/g, (x) => x.toUpperCase()); }
 function renderActivityTable(activities) {
   const recent = [...activities].filter((a) => !/treadmill/i.test(a.type || "")).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 14);
-  $("#activity-table").innerHTML = recent.map((a) => { const pace = activityPace(a); return `<tr><td>${esc(dateLabel(a.date, { year: "numeric", month: "short", day: "numeric" }))}</td><td>${esc(prettifyType(a.type))}</td><td class="mono">${isNumber(a.distance_km) ? `${a.distance_km.toFixed(1)} km` : "—"}</td><td class="mono">${isNumber(a.duration_s) ? fmtDuration(a.duration_s) : "—"}</td><td class="mono">${isNumber(a.elevation_m) ? `${Math.round(a.elevation_m)} m` : "—"}</td><td class="mono">${isNumber(pace) ? esc(fmtPace(pace)) : "—"}</td><td class="mono">${isNumber(a.average_hr_bpm) ? `${Math.round(a.average_hr_bpm)} bpm` : "—"}</td></tr>`; }).join("") || '<tr><td colspan="7">No activities with usable dates in this file.</td></tr>';
+  $("#activity-table").innerHTML = recent.map((a) => { const pace = running(a) ? activityPace(a) : null; return `<tr><td>${esc(dateLabel(a.date, { year: "numeric", month: "short", day: "numeric" }))}</td><td>${esc(prettifyType(a.type))}</td><td class="mono">${isNumber(a.distance_km) ? `${a.distance_km.toFixed(1)} km` : "—"}</td><td class="mono">${isNumber(a.duration_s) ? fmtDuration(a.duration_s) : "—"}</td><td class="mono">${isNumber(a.elevation_m) ? `${Math.round(a.elevation_m)} m` : "—"}</td><td class="mono">${isNumber(pace) ? esc(fmtPace(pace)) : "—"}</td><td class="mono">${isNumber(a.average_hr_bpm) ? `${Math.round(a.average_hr_bpm)} bpm` : "—"}</td></tr>`; }).join("") || '<tr><td colspan="7">No activities with usable dates in this file.</td></tr>';
 }
 
 const HEALTH_UNITS = { "Steps": "steps", "Resting heart rate": "bpm", "Daily minimum heart rate": "bpm", "Daily maximum heart rate": "bpm", "Body Battery": "score", "Body Battery charged": "score", "Average stress": "level", "Average respiration": "breaths/min", "Sleep score": "score", "Sleep duration": "hours", "Deep sleep": "hours", "REM sleep": "hours", "Average heart rate during sleep": "bpm", "Nightly HRV": "ms", "Weekly HRV average": "ms", "Average heart rate on runs": "bpm", "VO₂ max": "ml/kg/min", "VO2 max": "ml/kg/min" };
@@ -200,8 +201,8 @@ function renderSleepInsight(health, activities) {
   const lowP = median(low.map((x) => x.pace)); const highP = median(high.map((x) => x.pace)); const dsec = Math.round((highP - lowP) * 60);
   const paceText = dsec > 0 ? `${dsec} sec/km slower` : dsec < 0 ? `${Math.abs(dsec)} sec/km faster` : "at the same median pace";
   const lowHr = median(low.map((x) => x.activity.average_hr_bpm)); const highHr = median(high.map((x) => x.activity.average_hr_bpm)); const dhr = Math.round(highHr - lowHr);
-  const hrText = dhr > 0 ? `${dhr} bpm higher` : dhr < 0 ? `${Math.abs(dhr)} bpm lower` : "the same median heart rate";
-  $("#sleep-insight").textContent = `Across ${matched.length} matched runs, runs after a sleep score above ${threshold.toFixed(0)} were ${paceText}, with ${hrText}, compared with runs at or below that score.`;
+  const hrText = dhr > 0 ? `${dhr} bpm higher` : dhr < 0 ? `${Math.abs(dhr)} bpm lower` : "the same";
+  $("#sleep-insight").textContent = `Across ${matched.length} matched runs, the above-median sleep-score group was ${paceText} than the lower-score group. Its median run heart rate was ${hrText}.`;
 }
 
 const PLAN_TEMPLATES = {
