@@ -14,7 +14,7 @@ The Pages site is static and contains only synthetic sample data. It does not sy
 3. Open the Pages site and choose **Load my export**. The JSON is read in the browser tab; it is not uploaded or saved after closing the tab.
 4. Saved training plans are stored in this browser's local storage. They do not include the Garmin export.
 
-To deploy, push to `main`. The GitHub Actions workflow publishes `static_site/` to Pages. On first setup, open **Settings → Pages** in the repository and select **GitHub Actions** as the build and deployment source. After the workflow succeeds, the project site address is usually `https://mayawebb.github.io/garmin-connect/`.
+The site is published from the `main` branch. The repository root forwards to `static_site/`, so use `https://mayawebb.github.io/garmin-connect/` as the shareable link. Push changes to `main` to publish them. If Pages is not enabled for the repository, open **Settings → Pages** and choose **Deploy from a branch**, `main`, and `/(root)`.
 
 The Pages address is public. The repository contains only code and generated synthetic sample data; never add your export JSON, `.env`, or local database. GitHub Pages is static hosting, so the static version cannot safely keep API credentials or directly provide Garmin sync / OpenAI chat. The local app remains the place to sync Garmin and create the export.
 
@@ -49,7 +49,7 @@ python -m pytest -q
 ```text
 app.py                              Local Streamlit router, sync controls, export
 static_site/                        Static GitHub Pages dashboard
-.github/workflows/pages.yml         GitHub Pages deployment
+index.html                          Redirects the Pages root to the dashboard
 garmin_dashboard/
   views/analytics/page.py           Local training analytics
   views/health/page.py              Local wellness trends
