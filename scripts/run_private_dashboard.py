@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import queue
 import re
@@ -10,8 +12,10 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +27,8 @@ from garmin_dashboard.config import GARMIN_API_KEY, OPENAI_API_KEY, PROJECT_ROOT
 
 _EMAIL_RE = re.compile(r"^[^@\s,]+@[^@\s,.]+(?:\.[^@\s,.]+)+$")
 _TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+PRIVATE_DASHBOARD_SHORTCUT = "https://mayawebb.github.io/garmin-connect/private/"
+_DASHBOARD_LINK_PATH = "repos/mayawebb/garmin-connect/contents/private-dashboard-link.json"
 
 
 class LauncherConfigError(ValueError):
@@ -82,11 +88,55 @@ def extract_tunnel_url(line: str) -> str | None:
 
 
 def tunnel_environment(environment: dict[str, str] | None = None) -> dict[str, str]:
-    """Keep Garmin and OpenAI credentials out of the tunnel process environment."""
+    """Keep application and GitHub credentials out of the tunnel process environment."""
     clean = dict(os.environ if environment is None else environment)
     clean.pop("GARMIN_API_KEY", None)
     clean.pop("OPENAI_API_KEY", None)
+    clean.pop("GH_TOKEN", None)
+    clean.pop("GITHUB_TOKEN", None)
     return clean
+
+
+def publish_dashboard_target(tunnel_url: str, *, run=subprocess.run) -> str:
+    """Update the public Pages bridge to point at the current email-gated Quick Tunnel."""
+    parsed = urlsplit(tunnel_url)
+    if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".trycloudflare.com"):
+        raise LauncherConfigError("Cloudflare did not provide a valid Quick Tunnel URL.")
+    try:
+        current = run(
+            ["gh", "api", _DASHBOARD_LINK_PATH], capture_output=True, text=True,
+            timeout=20, check=False, env=tunnel_environment(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LauncherConfigError("GitHub CLI could not refresh the dashboard shortcut.") from exc
+    sha = None
+    if current.returncode == 0:
+        try:
+            sha = json.loads(current.stdout)["sha"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LauncherConfigError("GitHub returned an invalid dashboard shortcut record.") from exc
+    elif "404" not in (current.stderr or ""):
+        raise LauncherConfigError("GitHub CLI could not read the dashboard shortcut.")
+
+    pointer = json.dumps({
+        "url": tunnel_url,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, separators=(",", ":")).encode("utf-8")
+    encoded = base64.b64encode(pointer).decode("ascii")
+    command = [
+        "gh", "api", "--method", "PUT", _DASHBOARD_LINK_PATH,
+        "--field", "message=Refresh private dashboard link",
+        "--field", f"content={encoded}",
+    ]
+    if sha:
+        command.extend(["--field", f"sha={sha}"])
+    try:
+        updated = run(command, capture_output=True, text=True, timeout=30, check=False, env=tunnel_environment())
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LauncherConfigError("GitHub CLI could not refresh the dashboard shortcut.") from exc
+    if updated.returncode != 0:
+        raise LauncherConfigError("GitHub CLI could not refresh the dashboard shortcut.")
+    return PRIVATE_DASHBOARD_SHORTCUT
 
 
 def _read_tunnel_output(process: subprocess.Popen, urls: queue.Queue) -> None:
@@ -168,7 +218,12 @@ def main() -> int:
             if tunnel_url is None:
                 break
             if tunnel_url:
-                print(f"Private dashboard (email PIN sign-in): {tunnel_url}", flush=True)
+                try:
+                    shortcut = publish_dashboard_target(tunnel_url)
+                except LauncherConfigError:
+                    print(f"Stable shortcut could not be refreshed. Use this email-protected link: {tunnel_url}", flush=True)
+                else:
+                    print(f"Private Garmin dashboard (email PIN sign-in): {shortcut}", flush=True)
                 break
         if not tunnel_url:
             raise LauncherConfigError("Cloudflare did not provide a Quick Tunnel URL. Check the local cloudflared installation and network.")

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Training Lab · Private dashboard</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #101512; color: #edf3ee; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; }
+    main { width: min(100%, 520px); padding: 36px; border: 1px solid #2b3830; border-radius: 18px; background: #17211c; box-shadow: 0 20px 80px #0005; }
+    .mark { color: #8bc5a6; font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 20px 0 10px; font-size: clamp(28px, 7vw, 38px); }
+    p { color: #b7c4bb; line-height: 1.65; }
+    #status { margin-top: 24px; padding: 14px 16px; border-radius: 10px; background: #202c25; color: #e3eee6; }
+    #status.error { color: #ffd1c9; background: #3a2422; }
+    a { color: #a8d7bb; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">Training Lab</div>
+    <h1>Opening your private dashboard</h1>
+    <p>Your Garmin data stays on your computer. This link will take you to the live dashboard, where you’ll sign in with the email PIN.</p>
+    <div id="status" role="status" aria-live="polite">Checking whether the dashboard is online…</div>
+  </main>
+  <script>
+    const status = document.querySelector("#status");
+    const pointerUrl = `https://raw.githubusercontent.com/mayawebb/garmin-connect/main/private-dashboard-link.json?fresh=${Date.now()}`;
+    fetch(pointerUrl, { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Dashboard link is not available yet.");
+        return response.json();
+      })
+      .then(({ url }) => {
+        const target = new URL(url);
+        if (target.protocol !== "https:" || !target.hostname.endsWith(".trycloudflare.com") || target.username || target.password) {
+          throw new Error("The private dashboard address is invalid.");
+        }
+        location.replace(target.href);
+      })
+      .catch(() => {
+        status.classList.add("error");
+        status.textContent = "The private dashboard is offline. Start it on your Mac with: source .venv/bin/activate && python scripts/run_private_dashboard.py";
+      });
+  </script>
+</body>
+</html>

@@ -6,7 +6,22 @@ A Garmin training dashboard with a public demo and a private local service:
 - **GitHub Pages site** (`static_site/`) is a public synthetic-data demo. It has no access to your `.env`, Garmin account, or SQLite database.
 - **Local Streamlit app** remains available for manual Garmin synchronization, SQLite inspection, and curated data export.
 
-## GitHub Pages
+## Shareable private dashboard link
+
+Open the stable link: **https://mayawebb.github.io/garmin-connect/private/**. It redirects to the current live dashboard and then asks for an email PIN. The shortcut is shareable, but only addresses in `DASHBOARD_ALLOWED_EMAILS` can sign in.
+
+GitHub Pages cannot read the Mac's `.env` or SQLite database. The private link reaches the real Garmin data through the local API on this Mac, exposed over an email-restricted Cloudflare Quick Tunnel. No domain purchase or Cloudflare account setup is needed. The Mac, dashboard server, and tunnel must stay running; start them with:
+
+```bash
+source .venv/bin/activate
+python scripts/run_private_dashboard.py
+```
+
+The launcher updates the Pages shortcut automatically whenever the tunnel URL changes. It uses the GitHub CLI, so run `gh auth login` once if it is not already signed in. If the Mac is asleep or the command is stopped, the shortcut explains how to start it again. The public Pages demo at the root remains synthetic sample data.
+
+Install Cloudflare Tunnel if needed (`brew install cloudflared`).
+
+## Public GitHub Pages demo
 
 The Pages site is static and contains only synthetic sample data. It does not sync Garmin, send requests to OpenAI, or contain credentials. Its chat uses local rules. To view your own data privately, use the local backend below. You can also:
 
@@ -41,23 +56,9 @@ The local app also starts with synthetic sample activities if no records are sto
 
 For optional OpenAI chat in the local Streamlit app, add `OPENAI_API_KEY` in `.env`. API usage is billed separately from ChatGPT access.
 
-## Open the private HTTPS dashboard
+## Local-only Garmin app
 
-The private dashboard runs on this Mac and uses the same `.env` and SQLite data as the local app. Cloudflare Quick Tunnel supplies a temporary HTTPS link and sends a one-time PIN to each allowed email. The Mac and this command must stay running while the link is in use; the link changes when you restart it.
-
-1. Make sure `.env` has `GARMIN_API_KEY` and `OPENAI_API_KEY`. Set `DASHBOARD_ALLOWED_EMAILS` to the email address allowed to sign in. Separate multiple allowed addresses with commas.
-2. Install Cloudflare Tunnel if needed. On macOS with Homebrew: `brew install cloudflared`.
-3. Start the private service:
-
-   ```bash
-   source .venv/bin/activate
-   python scripts/run_private_dashboard.py
-   ```
-
-4. Open the `https://…trycloudflare.com` link printed in the terminal. Enter the one-time PIN sent to an allowed email.
-5. Select **Sync Garmin** in the dashboard to update activities and recent wellness data. The dashboard shows separate activity and wellness date ranges and the number of stored records.
-
-Press `Ctrl+C` in the terminal to stop the server and tunnel. The local service binds to `127.0.0.1`; only the authenticated Cloudflare tunnel exposes it. OpenAI receives your question and a compact summary of synced metrics; the key stays on this Mac and API requests use `store: false`. Cloudflare Quick Tunnels are temporary and intended for development, so this is not an always-on, permanent link.
+For direct local access, run `streamlit run app.py`. The shareable private link above uses the same `.env` and SQLite database through the protected local API.
 
 ## Tests
 

@@ -1,10 +1,16 @@
+import base64
+import json
+from subprocess import CompletedProcess
+
 import pytest
 
 from scripts.run_private_dashboard import (
+    PRIVATE_DASHBOARD_SHORTCUT,
     LauncherConfigError,
     build_tunnel_command,
     configured_port,
     extract_tunnel_url,
+    publish_dashboard_target,
     tunnel_environment,
     validate_configuration,
 )
@@ -47,3 +53,28 @@ def test_tunnel_process_does_not_inherit_garmin_or_openai_secrets():
 def test_invalid_port_is_a_safe_configuration_error():
     with pytest.raises(LauncherConfigError, match="PRIVATE_DASHBOARD_PORT"):
         configured_port("not-a-port")
+
+
+def test_publishing_shortcut_rejects_non_quick_tunnel_urls():
+    with pytest.raises(LauncherConfigError, match="Quick Tunnel URL"):
+        publish_dashboard_target("https://example.com")
+
+
+def test_publishing_shortcut_updates_public_pointer_without_printing_target():
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            return CompletedProcess(command, 0, json.dumps({"sha": "prior-sha"}), "")
+        return CompletedProcess(command, 0, "{}", "")
+
+    tunnel_url = "https://quiet-bird.trycloudflare.com"
+    assert publish_dashboard_target(tunnel_url, run=fake_run) == PRIVATE_DASHBOARD_SHORTCUT
+    assert calls[0][:3] == ["gh", "api", "repos/mayawebb/garmin-connect/contents/private-dashboard-link.json"]
+    assert "--method" in calls[1] and "PUT" in calls[1]
+    assert "sha=prior-sha" in calls[1]
+    encoded = next(arg.removeprefix("content=") for arg in calls[1] if arg.startswith("content="))
+    payload = json.loads(base64.b64decode(encoded))
+    assert payload["url"] == tunnel_url
+    assert payload["updated_at"]
