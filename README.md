@@ -14,6 +14,8 @@ The Pages site is static and contains only synthetic sample data. It does not sy
 3. Open the Pages site and choose **Load my export**. The JSON is read in the browser tab; it is not uploaded or saved after closing the tab.
 4. Saved training plans are stored in this browser's local storage. They do not include the Garmin export.
 
+The site starts with clearly labeled synthetic sample data. A number such as “28 runs” is demo data until you load your own export. The export contains records already synced into your local SQLite database; it does not make a live Garmin API connection from GitHub Pages.
+
 The site is published from the `main` branch. The repository root forwards to `static_site/`, so use `https://mayawebb.github.io/garmin-connect/` as the shareable link. Push changes to `main` to publish them. If Pages is not enabled for the repository, open **Settings → Pages** and choose **Deploy from a branch**, `main`, and `/(root)`.
 
 The Pages address is public. The repository contains only code and generated synthetic sample data; never add your export JSON, `.env`, or local database. GitHub Pages is static hosting, so the static version cannot safely keep API credentials or directly provide Garmin sync / OpenAI chat. The local app remains the place to sync Garmin and create the export.
@@ -42,6 +44,7 @@ For optional OpenAI chat in the local Streamlit app, add `OPENAI_API_KEY` in `.e
 
 ```bash
 python -m pytest -q
+node --test tests/static_chat.test.mjs
 ```
 
 ## Architecture

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
-  <script src="app.js" defer></script>
+  <script type="module" src="app.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -23,7 +23,7 @@
       </nav>
       <div class="rail-bottom">
         <div class="data-state"><span class="state-dot"></span><span id="data-source">Synthetic sample</span></div>
-        <label class="button secondary import-label" for="data-file">Load my export</label>
+        <label class="button secondary import-label" for="data-file">Load Garmin export</label>
         <input id="data-file" type="file" accept="application/json,.json" hidden>
         <button id="reset-sample" class="text-button">Return to sample data</button>
         <p class="privacy-note">Your file is read in this browser tab. It is never uploaded.</p>
@@ -31,13 +31,15 @@
     </aside>
 
     <main>
-      <header class="topbar"><span>PERSONAL PERFORMANCE / <span id="today-label"></span></span><span class="topbar-right">GARMIN DATA · LOCAL VIEW</span></header>
+      <header class="topbar"><span>PERSONAL PERFORMANCE / <span id="today-label"></span></span><span class="topbar-right"><span id="data-source-top">SYNTHETIC SAMPLE</span><label class="button secondary topbar-import" for="data-file">Load my Garmin export</label></span></header>
       <section class="page active" id="analytics-page">
         <div class="page-heading"><div><p class="eyebrow">TRAINING LOAD · RUNNING</p><h1>Build a clearer<br>picture of your training.</h1></div><p class="heading-note">Weekly volume, run effort, and activity mix—read as trends, not isolated numbers.</p></div>
         <div class="metric-row" id="analytics-metrics"></div>
+        <p class="source-notice" id="source-notice">Synthetic sample data is showing. Load your Garmin export to see your own history.</p>
         <section class="story-band" id="training-story"><span class="story-mark">↗</span><div><p class="eyebrow">RECENT BLOCK</p><p class="story-copy">Loading your training story…</p></div></section>
+        <article class="panel advice-panel"><div class="panel-head"><div><p class="eyebrow">NEXT STEPS</p><h2>Suggestions from your training pattern</h2></div></div><div id="run-suggestions" class="suggestion-grid"></div><p class="chart-note">General training guidance, not medical advice. Base hard sessions on how you feel and allow recovery.</p></article>
         <div class="chart-grid">
-          <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">VOLUME</p><h2>Weekly running distance</h2></div><span class="unit-tag">km / calendar week</span></div><div id="weekly-distance" class="chart"></div><p class="chart-note">Bars show recorded distance. The line smooths the last four calendar weeks; weeks without runs count as 0 km.</p></article>
+          <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">VOLUME</p><h2>Weekly running distance</h2></div><span class="unit-tag">km / calendar week</span></div><div id="weekly-distance" class="chart"></div><p class="chart-note">Weeks with no recorded runs show 0 km. A week with a run missing distance is left blank; the four-week mean skips unknown totals.</p></article>
           <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">EFFORT</p><h2>Typical run pace</h2></div><span class="unit-tag">min/km</span></div><div id="pace-trend" class="chart"></div><p class="chart-note">Each point is one run’s average pace, shown as minutes:seconds per kilometer. Lower is faster.</p></article>
           <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">PERFORMANCE INDICATOR</p><h2>5 km equivalent</h2></div><span class="unit-tag">elapsed time</span></div><div id="race-trend" class="chart"></div><p class="chart-note">A rough distance-based estimate from runs of 2 km or longer. It is not a race result or guaranteed PR.</p></article>
           <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">ALL SPORTS</p><h2>Your activity mix</h2></div><span class="unit-tag">sessions / week</span></div><div id="activity-mix" class="chart"></div><p class="chart-note">Non-running activities remain visible here. Treadmill runs are omitted from this dashboard.</p></article>
@@ -47,7 +49,9 @@
 
       <section class="page" id="health-page">
         <div class="page-heading"><div><p class="eyebrow">RECOVERY · WELLNESS</p><h1>Signals that shape<br>how you feel.</h1></div><p class="heading-note">A readable view of your recorded health measures. Missing metrics stay missing; no synthetic readiness score.</p></div>
+        <p class="source-notice" id="health-source-note"></p>
         <div class="health-cards" id="health-cards"></div>
+        <article class="panel advice-panel health-advice"><div class="panel-head"><div><p class="eyebrow">RECOVERY CHECK-IN</p><h2>What to consider this week</h2></div></div><div id="health-suggestions" class="suggestion-grid"></div></article>
         <div class="chart-grid health-grid">
           <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">RECORDED MEASURE</p><h2 id="health-chart-title">Health trends</h2></div><select id="health-select" aria-label="Choose a health measure"></select></div><div id="health-trend" class="chart"></div><p class="chart-note">Dots are recorded readings. The line is a rolling seven-day mean; gaps stay visible.</p></article>
           <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">RUN EFFORT</p><h2>Heart rate on runs</h2></div><span class="unit-tag">bpm</span></div><div id="run-hr" class="chart"></div><p class="chart-note">Weekly median of recorded average run heart rates. Run type, route, heat and pace affect comparisons.</p></article>
@@ -66,7 +70,7 @@
     </main>
   </div>
   <button id="chat-launcher" class="chat-launcher" aria-label="Ask about your training" title="Ask about your training">✳</button>
-  <aside class="chat-panel" id="chat-panel" aria-label="Training chat" hidden><div class="chat-head"><div><p class="eyebrow">LOCAL TRAINING CHAT</p><strong>Ask your data</strong></div><button id="chat-close" class="close-button" aria-label="Close chat">×</button></div><div class="chat-messages" id="chat-messages"><p class="chat-welcome">Ask about distance, pace, heart rate, sleep, or activity types. Answers are computed in this browser.</p></div><form id="chat-form"><input id="chat-input" autocomplete="off" placeholder="Ask about your training…" aria-label="Ask about your training"><button aria-label="Send message">↑</button></form><p class="chat-foot">No OpenAI or Garmin request is made from this public static site.</p></aside>
+  <aside class="chat-panel" id="chat-panel" aria-label="Training chat" hidden><div class="chat-head"><div><p class="eyebrow">TRAINING CHAT</p><strong>Ask your data</strong></div><button id="chat-close" class="close-button" aria-label="Close chat">×</button></div><div class="chat-messages" id="chat-messages"><p class="chat-welcome">Load your Garmin export, then ask about your metrics. This static link uses local rules; it does not call OpenAI.</p></div><form id="chat-form"><input id="chat-input" autocomplete="off" placeholder="Ask about your training…" aria-label="Ask about your training"><button aria-label="Send message">↑</button></form><p class="chat-foot">The OpenAI key in your local .env is not available to a static website. No Garmin request is made here.</p></aside>
   <div class="toast" id="toast" role="status"></div>
 </body>
 </html>

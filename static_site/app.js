@@ -1,7 +1,10 @@
+import { buildRunningWeeks, classifyTrainingQuestion } from "./dashboard-logic.mjs";
+
 const COLORS = { green: "#a7d9bd", green2: "#5eaa82", gold: "#e5ad78", blue: "#94b4cf", purple: "#b7a5d4", muted: "#9aa79e", line: "#344139", panel: "#1b2520" };
 const SAMPLE_URL = "sample-data.json";
 let dataset = null;
 let usingSample = true;
+let previousIntent = null;
 
 const $ = (selector) => document.querySelector(selector);
 const fmtPace = (minutes) => {
@@ -19,8 +22,8 @@ const median = (values) => {
   if (!sorted.length) return null;
   return sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
 };
-const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const isNumber = (value) => typeof value === "number" && Number.isFinite(value);
+const average = (values) => { const valid = values.filter(isNumber); return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null; };
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 
 function setPage(name) {
@@ -46,34 +49,7 @@ function layoutChart(id, traces, options = {}) {
   window.Plotly.react(target, traces, layout, { responsive: true, displayModeBar: false });
 }
 
-function getWeeks(activities) {
-  const map = new Map();
-  activities.filter(running).forEach((activity) => {
-    if (!activity.date) return;
-    const day = asDate(activity.date);
-    const mondayOffset = (day.getDay() + 6) % 7;
-    day.setDate(day.getDate() - mondayOffset);
-    const key = day.toISOString().slice(0, 10);
-    if (!map.has(key)) map.set(key, { week: key, distance: 0, knownRuns: 0, runs: 0, paces: [], hrs: [] });
-    const row = map.get(key);
-    row.runs += 1;
-    if (isNumber(activity.distance_km)) { row.distance += activity.distance_km; row.knownRuns += 1; }
-    const pace = activityPace(activity);
-    if (isNumber(pace)) row.paces.push(pace);
-    if (isNumber(activity.average_hr_bpm)) row.hrs.push(activity.average_hr_bpm);
-  });
-  if (!map.size) return [];
-  const sortedKeys = [...map.keys()].sort();
-  const week = asDate(sortedKeys[0]);
-  const last = asDate(sortedKeys.at(-1));
-  const rows = [];
-  while (week <= last) {
-    const key = week.toISOString().slice(0, 10);
-    rows.push(map.get(key) || { week: key, distance: 0, knownRuns: 0, runs: 0, paces: [], hrs: [] });
-    week.setDate(week.getDate() + 7);
-  }
-  return rows.map((row, i) => ({ ...row, rolling: average(rows.slice(Math.max(0, i - 3), i + 1).map((x) => x.distance)) }));
-}
+const getWeeks = buildRunningWeeks;
 
 function renderAnalytics() {
   const activities = dataset.activities || [];
@@ -88,18 +64,24 @@ function renderAnalytics() {
     currentMonday.setHours(0, 0, 0, 0);
     return asDate(week.week) < currentMonday;
   });
-  const avgWeek = average(completeWeeks.map((w) => w.distance));
+  const knownWeeks = completeWeeks.filter((week) => isNumber(week.distance));
+  const avgWeek = average(knownWeeks.map((w) => w.distance));
   const estimated = runs.filter((a) => a.distance_km >= 2 && isNumber(a.duration_s)).map((a) => ({ date: a.date, seconds: a.duration_s * (5 / a.distance_km) ** 1.06 }));
   const values = [
     ["Outdoor run sessions", runs.length, "recorded activities"],
-    ["Run distance", knownDistance.length ? `${knownDistance.reduce((a, b) => a + b, 0).toFixed(1)} km` : "Unavailable", `${knownDistance.length} with distance`],
+    ["Recorded run distance", knownDistance.length ? `${knownDistance.reduce((a, b) => a + b, 0).toFixed(1)} km` : "Unavailable", `${knownDistance.length} runs with distance`],
     ["Longest recorded run", knownDistance.length ? `${Math.max(...knownDistance).toFixed(1)} km` : "Unavailable", "distance where recorded"],
     ["Median run pace", fmtPace(medianPace), "median of run averages"],
-    ["Avg per complete week", avgWeek === null ? "Unavailable" : `${avgWeek.toFixed(1)} km`, `${completeWeeks.length} complete weeks`],
+    ["Avg per complete week", avgWeek === null ? "Unavailable" : `${avgWeek.toFixed(1)} km`, `${knownWeeks.length} complete weeks with known distance`],
   ];
   $("#analytics-metrics").innerHTML = values.map(([label, value, sub]) => `<div class="metric"><span class="metric-label">${esc(label)}</span><strong class="metric-value">${esc(value)}</strong><span class="metric-sub">${esc(sub)}</span></div>`).join("");
   const story = trainingStory(weeks, runs);
   $("#training-story .story-copy").textContent = story;
+  $("#source-notice").textContent = usingSample
+    ? "Synthetic sample data is showing—not your Garmin history. Use “Load my Garmin export” to view the records saved from your Garmin sync."
+    : "Using your locally imported Garmin export. This is the last data synced into the local app, not a live Garmin connection.";
+  $("#source-notice").classList.toggle("loaded", !usingSample);
+  renderRunSuggestions(weeks, runs);
 
   const visibleWeeks = weeks.slice(-26);
   layoutChart("weekly-distance", [
@@ -131,12 +113,41 @@ function trainingStory(weeks, runs) {
   const recentKm = average(recent.map((w) => w.distance)); const priorKm = average(prior.map((w) => w.distance));
   const recentRuns = recent.reduce((sum, w) => sum + w.runs, 0); const priorRuns = prior.reduce((sum, w) => sum + w.runs, 0);
   const change = priorKm > 0 ? Math.round((recentKm / priorKm - 1) * 100) : null;
-  const recentLength = recentRuns ? recent.reduce((sum, week) => sum + week.distance, 0) / recentRuns : 0;
-  const priorLength = priorRuns ? prior.reduce((sum, week) => sum + week.distance, 0) / priorRuns : 0;
+  const recentKeys = new Set(recent.map((week) => week.week)); const priorKeys = new Set(prior.map((week) => week.week));
+  const weekKey = (activity) => { const day = asDate(activity.date); day.setDate(day.getDate() - ((day.getDay() + 6) % 7)); return day.toISOString().slice(0, 10); };
+  const meanRunDistance = (keys) => average(runs.filter((activity) => keys.has(weekKey(activity)) && isNumber(activity.distance_km)).map((activity) => activity.distance_km));
+  const recentLength = meanRunDistance(recentKeys); const priorLength = meanRunDistance(priorKeys);
   const direction = change === null ? "" : change > 3 ? `up ${change}%` : change < -3 ? `down ${Math.abs(change)}%` : "about level";
-  return `Across the last four complete weeks, average running volume was ${recentKm.toFixed(1)} km/week (${direction}) versus ${priorKm.toFixed(1)} km/week in the previous block. You logged ${recentRuns} runs versus ${priorRuns}; average distance per run moved from ${priorLength.toFixed(1)} to ${recentLength.toFixed(1)} km.`;
+  const recentWeekCount = recent.filter((week) => isNumber(week.distance)).length;
+  const priorWeekCount = prior.filter((week) => isNumber(week.distance)).length;
+  const volumeText = recentKm === null || priorKm === null
+    ? "There are not enough complete weeks with known distance to compare running volume."
+    : `Across the last four complete weeks, recorded volume averaged ${recentKm.toFixed(1)} km/week (${direction}) over ${recentWeekCount} weeks with known totals, versus ${priorKm.toFixed(1)} km/week over ${priorWeekCount} weeks in the previous block.`;
+  const runDistanceText = recentLength === null || priorLength === null
+    ? "Average distance per run is unavailable because some runs lack distance."
+    : `Among runs with distance recorded, mean distance per run moved from ${priorLength.toFixed(1)} to ${recentLength.toFixed(1)} km.`;
+  return `${volumeText} You logged ${recentRuns} runs versus ${priorRuns}; ${runDistanceText}`;
 }
 function currentWeekKey() { const day = new Date(); day.setHours(12, 0, 0, 0); day.setDate(day.getDate() - ((day.getDay() + 6) % 7)); return day.toISOString().slice(0, 10); }
+
+function renderRunSuggestions(weeks, runs) {
+  const complete = weeks.filter((week) => week.week < currentWeekKey());
+  const recent = complete.slice(-4); const previous = complete.slice(-8, -4);
+  const recentKm = average(recent.map((week) => week.distance)); const previousKm = average(previous.map((week) => week.distance));
+  let volumeAdvice = "Build consistency first: keep a repeatable weekly schedule before adding more distance.";
+  if (recentKm !== null && previousKm !== null) {
+    const change = previousKm ? Math.round((recentKm / previousKm - 1) * 100) : null;
+    volumeAdvice = `Your last complete block averaged ${recentKm.toFixed(1)} km/week versus ${previousKm.toFixed(1)} km/week before it. ${change > 0 ? "If that increase felt comfortable, hold this level before adding more." : change < 0 ? "If that reduction was intentional, rebuild gradually when you feel recovered." : "A steady block gives you room to work on consistency."}`;
+  }
+  const matched = runs.filter((activity) => isNumber(activityPace(activity)) && isNumber(activity.average_hr_bpm));
+  const hr = median(matched.map((activity) => activity.average_hr_bpm));
+  $("#run-suggestions").innerHTML = [
+    ["Keep easy days easy", "Use the talk test for most runs. If breathing or heart rate drifts up, slow down or add a short walk; don’t force your usual pace every day."],
+    ["Progress volume patiently", volumeAdvice],
+    ["Add speed with recovery", "If you already run consistently and feel rested, use one controlled tempo or interval workout in a week. Keep the other runs easy and leave a recovery day after hard efforts."],
+  ].map(([title, body]) => `<div class="suggestion"><h3>${esc(title)}</h3><p>${esc(body)}</p></div>`).join("");
+  if (hr === null && !usingSample) $("#run-suggestions").insertAdjacentHTML("beforeend", '<div class="suggestion"><h3>Track effort consistently</h3><p>Average run heart rate is missing for these records, so compare pace trends only until more heart-rate data is available.</p></div>');
+}
 
 function renderActivityMix(activities) {
   const weeks = new Map();
@@ -158,6 +169,11 @@ function renderActivityTable(activities) {
 const HEALTH_UNITS = { "Steps": "steps", "Resting heart rate": "bpm", "Daily minimum heart rate": "bpm", "Daily maximum heart rate": "bpm", "Body Battery": "score", "Body Battery charged": "score", "Average stress": "level", "Average respiration": "breaths/min", "Sleep score": "score", "Sleep duration": "hours", "Deep sleep": "hours", "REM sleep": "hours", "Average heart rate during sleep": "bpm", "Nightly HRV": "ms", "Weekly HRV average": "ms", "Average heart rate on runs": "bpm", "VO₂ max": "ml/kg/min", "VO2 max": "ml/kg/min" };
 function renderHealth() {
   const health = dataset.health || [];
+  const sourceNote = usingSample
+    ? "Synthetic sample wellness data is showing—not your Garmin history. Load your Garmin export to view your own measures."
+    : "Using wellness records from your local Garmin export. The export includes only measures actually returned and saved by Garmin.";
+  $("#health-source-note").textContent = sourceNote;
+  $("#health-source-note").classList.toggle("loaded", !usingSample);
   const names = [...new Set(health.map((x) => x.metric).filter(Boolean))].sort((a, b) => (a === "Average heart rate on runs" ? -1 : b === "Average heart rate on runs" ? 1 : a.localeCompare(b)));
   const selector = $("#health-select"); selector.innerHTML = names.map((name) => `<option>${esc(name)}</option>`).join("");
   const cardMetrics = ["Sleep duration", "Sleep score", "Resting heart rate", "Nightly HRV", "Body Battery", "Steps"];
@@ -176,8 +192,35 @@ function renderHealth() {
   const weeks = getWeeks(runHr);
   layoutChart("run-hr", [{ type: "scatter", x: weeks.map((w) => w.week), y: weeks.map((w) => median(w.hrs)), mode: "markers+lines", name: "Weekly median", marker: { color: COLORS.blue, size: 7 }, line: { color: COLORS.blue, width: 1.5 }, customdata: weeks.map((w) => w.hrs.length), hovertemplate: "Week of %{x}<br>%{y:.0f} bpm<br>%{customdata} run(s)<extra></extra>" }], { showlegend: false, yaxis: { title: "bpm" }, xaxis: { tickformat: "%b %d", nticks: 6 } });
   renderSleepInsight(health, dataset.activities || []);
+  renderHealthSuggestions(health);
   const vo2 = health.filter((x) => /vo.?2\s*max/i.test(x.metric || "") && isNumber(x.value));
   $("#vo2-copy").textContent = vo2.length ? `${vo2.length} recorded VO₂ max value${vo2.length === 1 ? "" : "s"} are present; latest is ${vo2.at(-1).value.toFixed(1)} ${HEALTH_UNITS[vo2.at(-1).metric] || ""} on ${dateLabel(vo2.at(-1).date, { year: "numeric", month: "short", day: "numeric" })}.` : "No VO₂ max reading is present in the uploaded export. This dashboard does not estimate or invent one.";
+}
+function renderHealthSuggestions(health) {
+  const cardMean = (metric, from, to, latestDate) => {
+    const rows = health.filter((item) => item.metric === metric && isNumber(item.value));
+    const end = asDate(latestDate);
+    const values = rows.filter((item) => { const age = (end - asDate(item.date)) / 86400000; return age >= from && age < to; }).map((item) => item.value);
+    return average(values);
+  };
+  const dates = health.filter((item) => item.metric !== "Average heart rate on runs" && item.date && isNumber(item.value)).map((item) => dateOnly(item.date)).sort();
+  let first = ["Use trends, not one-day changes", "Compare sleep, resting heart rate, and HRV across several days. A single reading is not enough to change a training plan."];
+  if (dates.length) {
+    const latest = dates.at(-1);
+    const sleepRecent = cardMean("Sleep duration", 0, 7, latest); const sleepPrior = cardMean("Sleep duration", 7, 14, latest);
+    const rhrRecent = cardMean("Resting heart rate", 0, 7, latest); const rhrPrior = cardMean("Resting heart rate", 7, 14, latest);
+    if (sleepRecent !== null && sleepPrior !== null && rhrRecent !== null && rhrPrior !== null) {
+      const sleepDelta = sleepRecent - sleepPrior; const rhrDelta = rhrRecent - rhrPrior;
+      if (sleepDelta <= -0.5 && rhrDelta >= 2) first = ["Give recovery some room", `Recent sleep averaged ${Math.abs(sleepDelta).toFixed(1)} hours less while resting heart rate was ${rhrDelta.toFixed(0)} bpm higher than the previous week. Consider making the next hard session easy if you also feel unusually tired; recheck the trend over several days.`];
+      else first = ["Recovery signals are mixed", `Sleep changed ${sleepDelta >= 0 ? "+" : ""}${sleepDelta.toFixed(1)} hours and resting heart rate changed ${rhrDelta >= 0 ? "+" : ""}${rhrDelta.toFixed(0)} bpm versus the previous week. Keep your routine steady and watch whether the pattern continues.`];
+    }
+  }
+  const hrCount = (dataset.activities || []).filter((activity) => running(activity) && isNumber(activity.average_hr_bpm)).length;
+  const sourceLine = usingSample ? "These example suggestions use synthetic data." : "These checks use the measurements in your local export.";
+  $("#health-suggestions").innerHTML = [
+    first,
+    ["Check run effort under similar conditions", hrCount ? `${hrCount} runs include average heart rate. Compare similar easy routes and weather; heat, hills, hydration, and sensor fit can shift the number.` : "No outdoor run has average heart rate in this export. Sync more activity detail before comparing run effort."],
+  ].map(([title, body]) => `<div class="suggestion"><h3>${esc(title)}</h3><p>${esc(body)}</p></div>`).join("") + `<p class="chart-note">${esc(sourceLine)}</p>`;
 }
 function formatHealth(value, metric) { if (metric === "Sleep duration") { const h = Math.floor(value); return `${h}h ${Math.round((value - h) * 60)}m`; } if (metric === "Steps") return Math.round(value).toLocaleString(); return `${Number(value).toFixed(metric.includes("score") || metric.includes("Battery") ? 0 : 0)} ${HEALTH_UNITS[metric] || ""}`; }
 function renderHealthTrend() {
@@ -233,23 +276,63 @@ function renderSavedPlans() {
 }
 
 function answerQuestion(question) {
-  const q = question.toLowerCase(); const activities = dataset.activities || []; const runs = activities.filter(running); const weeks = getWeeks(activities); const health = dataset.health || [];
-  if (/chart|graph|plot|visuali[sz]/.test(q)) {
+  const q = question.toLowerCase();
+  const intent = classifyTrainingQuestion(question, previousIntent);
+  if (intent !== "follow_up") previousIntent = intent;
+  const activities = dataset.activities || [];
+  const runs = activities.filter(running);
+  const weeks = getWeeks(activities);
+  const health = dataset.health || [];
+  const sourceNote = usingSample ? "You’re currently viewing the synthetic demo, not your Garmin history. Load your Garmin export to personalize this. " : "";
+
+  if (intent === "follow_up") {
+    if (previousIntent === "heart_rate_pace_goal") return `${sourceNote}I mean: don't try to run faster on every run. Keep most runs easy enough to speak in full sentences; slow down or take a short walk if your heart rate drifts up. Build easy running consistently, then use one controlled faster workout a week if you are recovering well.`;
+    return "I only have local, rule-based answers here. Try asking a complete question about one metric or goal, such as “compare my recent run pace and heart rate.”";
+  }
+
+  if (intent === "heart_rate_pace_goal" || intent === "heart_rate_pace") {
+    const matched = runs.filter((activity) => isNumber(activityPace(activity)) && isNumber(activity.average_hr_bpm));
+    const medianPace = median(matched.map(activityPace));
+    const medianHr = median(matched.map((activity) => activity.average_hr_bpm));
+    const comparison = compareRecentRunEffort(runs, weeks);
+    const baseline = matched.length
+      ? `${matched.length} outdoor runs with both measures have an overall median of ${fmtPace(medianPace)} and ${medianHr.toFixed(0)} bpm.`
+      : "There are not enough outdoor runs with both pace and average heart rate to calculate a baseline.";
+    return `${sourceNote}${comparison || baseline} These are mixed workouts, not a controlled comparison. To move both in the right direction: 1) Run most sessions at conversational effort and let pace be slower when needed. 2) Build easy weekly distance gradually, only while recovery is good. 3) If you run regularly and feel recovered, add one controlled tempo or interval session per week; keep other runs easy. 4) Compare similar routes and weather, since heat, hills, sleep, hydration, and wrist-sensor fit can shift heart rate.`;
+  }
+
+  if (intent === "visualize") {
     const metric = [...new Set(health.map((x) => x.metric).filter(Boolean))].find((name) => q.includes(name.toLowerCase()));
-    if (metric) { setPage("health"); $("#health-select").value = metric; renderHealthTrend(); return `Opened the ${metric} trend in Health using the recorded dates in this export.`; }
+    if (metric) { setPage("health"); $("#health-select").value = metric; renderHealthTrend(); return `Opened the ${metric} trend in Health using the data currently loaded in this tab.`; }
     if (/weekly.*(run|distance)|running.*distance/.test(q)) { setPage("analytics"); return "The weekly running distance chart is shown on Analytics, with a four-week mean."; }
     if (/pace/.test(q)) { setPage("analytics"); return "The run pace chart is shown on Analytics, with pace labeled in min:sec per kilometer."; }
-    if (/activity|sport|strength/.test(q)) { setPage("analytics"); return "The activity mix chart is shown on Analytics. It includes all tracked non-treadmill activity types."; }
-    return "I can open a recorded health metric by name, or show the built-in weekly distance, pace, and activity mix charts. Ask for one of those.";
+    if (/activity|sport|strength/.test(q)) { setPage("analytics"); return "The activity mix chart is shown on Analytics. It includes tracked non-treadmill activities."; }
+    return "I can open a health metric by name, or show the weekly distance, pace, and activity mix charts. Which would you like?";
   }
-  if (/vo.?2|max/.test(q)) { const values = health.filter((x) => /vo.?2\s*max/i.test(x.metric || "") && isNumber(x.value)); return values.length ? `The latest recorded VO₂ max in this export is ${values.at(-1).value.toFixed(1)} on ${dateLabel(values.at(-1).date)}.` : "There is no recorded VO₂ max value in this data export, so I can’t evaluate a trend or suggest a data-based target."; }
-  if (/sleep|recover|recovery/.test(q)) { const name = /score/.test(q) ? "Sleep score" : /hrv/.test(q) ? "Nightly HRV" : /resting|rhr/.test(q) ? "Resting heart rate" : "Sleep duration"; const rows = health.filter((x) => x.metric === name && isNumber(x.value)); return rows.length ? `The latest ${name.toLowerCase()} is ${formatHealth(rows.at(-1).value, name)} on ${dateLabel(rows.at(-1).date)}. I can show its dated trend on the Health tab.` : `${name} is not present in this export. Missing data stays unavailable.`; }
-  if (/heart|\bhr\b/.test(q)) { const rows = runs.filter((a) => isNumber(a.average_hr_bpm)); return rows.length ? `Across ${rows.length} outdoor runs with average heart rate, the median recorded value is ${median(rows.map((a) => a.average_hr_bpm)).toFixed(0)} bpm. Compare similar routes and paces before reading this as a fitness change.` : "There are no outdoor runs with recorded average heart rate in this export."; }
-  if (/pace|fast|time/.test(q)) { const paces = runs.map(activityPace).filter(isNumber); return paces.length ? `Your median recorded outdoor-run pace is ${fmtPace(median(paces))} across ${paces.length} runs with distance and duration. That is the middle of your run averages, not a race target.` : "There are no runs with both distance and duration available."; }
-  if (/week|distance|volume|kilometer|km/.test(q)) { const valid = weeks.filter((w) => w.week < currentWeekKey()); const recent = valid.slice(-4); return recent.length ? `Your last ${recent.length} complete weeks average ${average(recent.map((w) => w.distance)).toFixed(1)} km of running per week. ${recent.reduce((n, w) => n + w.runs, 0)} run sessions were recorded. Open Analytics for the full trend.` : "There are not enough complete weeks in this export to summarize running volume."; }
-  const types = new Map(); activities.filter((a) => !/treadmill/i.test(a.type || "")).forEach((a) => types.set(prettifyType(a.type), (types.get(prettifyType(a.type)) || 0) + 1));
-  if (/activity|sport|workout|strength|yoga|cycle/.test(q)) return types.size ? `Your visible activity mix is ${[...types.entries()].map(([type, count]) => `${type}: ${count}`).join("; ")}. Treadmill runs are excluded.` : "No activities are in this export.";
-  return "I can summarize recorded running distance, pace, heart rate, sleep, recovery measures, activity mix, or VO₂ max availability. Try asking for one of those.";
+  if (intent === "vo2") { const values = health.filter((x) => /vo.?2\s*max/i.test(x.metric || "") && isNumber(x.value)); return values.length ? `${sourceNote}The latest recorded VO₂ max is ${values.at(-1).value.toFixed(1)} on ${dateLabel(values.at(-1).date)}.` : `${sourceNote}There is no recorded VO₂ max value in the loaded data, so I can’t evaluate its trend or suggest a data-based target.`; }
+  if (intent === "recovery") { const name = /score/.test(q) ? "Sleep score" : /hrv/.test(q) ? "Nightly HRV" : /resting|rhr/.test(q) ? "Resting heart rate" : "Sleep duration"; const rows = health.filter((x) => x.metric === name && isNumber(x.value)); return rows.length ? `${sourceNote}The latest ${name.toLowerCase()} is ${formatHealth(rows.at(-1).value, name)} on ${dateLabel(rows.at(-1).date)}. I can show its dated trend on the Health tab.` : `${sourceNote}${name} is not present in the loaded data. Missing data stays unavailable.`; }
+  if (intent === "heart_rate") { const rows = runs.filter((a) => isNumber(a.average_hr_bpm)); return rows.length ? `${sourceNote}Across ${rows.length} outdoor runs with average heart rate, the median recorded value is ${median(rows.map((a) => a.average_hr_bpm)).toFixed(0)} bpm. Compare similar routes and paces before reading this as a fitness change.` : `${sourceNote}There are no outdoor runs with recorded average heart rate in this data.`; }
+  if (intent === "pace") { const paces = runs.map(activityPace).filter(isNumber); return paces.length ? `${sourceNote}Your median recorded outdoor-run pace is ${fmtPace(median(paces))} across ${paces.length} runs with distance and duration. That is the middle of your run averages, not a race target.` : `${sourceNote}There are no runs with both distance and duration available.`; }
+  if (intent === "distance") { const valid = weeks.filter((w) => w.week < currentWeekKey()); const recent = valid.slice(-4); const known = recent.filter((week) => isNumber(week.distance)); return known.length ? `${sourceNote}Across the last ${known.length} complete weeks with known distance, average outdoor running volume was ${average(known.map((w) => w.distance)).toFixed(1)} km/week. ${recent.reduce((n, w) => n + w.runs, 0)} run sessions were recorded in the last four complete weeks.` : `${sourceNote}There are not enough complete weeks with known distance to summarize running volume.`; }
+  if (intent === "activity_mix") { const types = new Map(); activities.filter((a) => !/treadmill/i.test(a.type || "")).forEach((a) => types.set(prettifyType(a.type), (types.get(prettifyType(a.type)) || 0) + 1)); return types.size ? `${sourceNote}Your visible activity mix is ${[...types.entries()].map(([type, count]) => `${type}: ${count}`).join("; ")}. Treadmill runs are excluded.` : `${sourceNote}No activities are in this data.`; }
+  return "I can summarize running distance, pace, heart rate, sleep, recovery, activity mix, or VO₂ max availability. I can also explain ways to improve run pace and heart rate. Try a complete question about one of those.";
+}
+
+function compareRecentRunEffort(runs, weeks) {
+  const complete = weeks.filter((week) => week.week < currentWeekKey());
+  if (complete.length < 8) return null;
+  const recent = complete.slice(-4); const prior = complete.slice(-8, -4);
+  const keysFor = (block) => new Set(block.map((week) => week.week));
+  const keyFor = (activity) => { const day = asDate(activity.date); day.setDate(day.getDate() - ((day.getDay() + 6) % 7)); return day.toISOString().slice(0, 10); };
+  const summary = (keys) => {
+    const paired = runs.filter((activity) => keys.has(keyFor(activity)) && isNumber(activityPace(activity)) && isNumber(activity.average_hr_bpm));
+    return { count: paired.length, pace: median(paired.map(activityPace)), hr: median(paired.map((activity) => activity.average_hr_bpm)) };
+  };
+  const current = summary(keysFor(recent)); const previous = summary(keysFor(prior));
+  if (current.count < 2 || previous.count < 2) return null;
+  const paceDelta = Math.round((current.pace - previous.pace) * 60);
+  const paceText = paceDelta < 0 ? `${Math.abs(paceDelta)} sec/km faster` : paceDelta > 0 ? `${paceDelta} sec/km slower` : "at the same median pace";
+  return `In the last four complete weeks, ${current.count} runs with both measures had median pace ${fmtPace(current.pace)} and median average HR ${current.hr.toFixed(0)} bpm. In the previous four-week block, ${previous.count} comparable records were ${fmtPace(previous.pace)} and ${previous.hr.toFixed(0)} bpm (${paceText}).`;
 }
 function addChat(text, who) { const node = document.createElement("div"); node.className = `chat-bubble ${who}`; node.textContent = text; $("#chat-messages").append(node); $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight; }
 function toast(message) { const node = $("#toast"); node.textContent = message; node.classList.add("show"); setTimeout(() => node.classList.remove("show"), 2200); }
@@ -261,7 +344,15 @@ function validateData(data) {
   return { schema_version: 1, activities: data.activities.filter((a) => !/treadmill/i.test(a.type)).map((a) => ({ date: a.date, type: a.type, distance_km: isNumber(a.distance_km) ? a.distance_km : null, duration_s: isNumber(a.duration_s) ? a.duration_s : null, elevation_m: isNumber(a.elevation_m) ? a.elevation_m : null, average_hr_bpm: isNumber(a.average_hr_bpm) ? a.average_hr_bpm : null })), health: data.health.filter((x) => x && typeof x.metric === "string").map((x) => ({ date: x.date, metric: x.metric, value: isNumber(x.value) ? x.value : null, unit: typeof x.unit === "string" ? x.unit : "" })) };
 }
 async function loadSample() { const response = await fetch(SAMPLE_URL); if (!response.ok) throw new Error("Synthetic sample data could not be loaded."); dataset = validateData(await response.json()); usingSample = true; updateSource(); renderPage("analytics"); renderSavedPlans(); }
-function updateSource() { $("#data-source").textContent = usingSample ? "Synthetic sample" : "Your local export"; $(".state-dot").classList.toggle("loaded", !usingSample); }
+function updateSource() {
+  const label = usingSample ? "Synthetic sample" : "Your Garmin export";
+  $("#data-source").textContent = label;
+  $("#data-source-top").textContent = usingSample ? "SYNTHETIC SAMPLE" : "GARMIN EXPORT · LOCAL";
+  $(".state-dot").classList.toggle("loaded", !usingSample);
+  $(".chat-welcome").textContent = usingSample
+    ? "This page is using synthetic sample data. Load your Garmin export to ask about your own metrics. Answers here use local rules, not OpenAI."
+    : "Your Garmin export is loaded in this tab. Ask about your metrics; answers here use local rules, not OpenAI.";
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   $("#today-label").textContent = new Date().toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }).toUpperCase();
