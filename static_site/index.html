@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#121816">
-  <meta name="description" content="A private, browser-local training and health dashboard for Garmin exports.">
+  <meta name="description" content="A Garmin training and health dashboard with a private local backend and public synthetic-data demo.">
   <title>Training Lab · Garmin dashboard</title>
   <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
   <link rel="stylesheet" href="style.css">
@@ -26,7 +26,8 @@
         <label class="button secondary import-label" for="data-file">Load Garmin export</label>
         <input id="data-file" type="file" accept="application/json,.json" hidden>
         <button id="reset-sample" class="text-button">Return to sample data</button>
-        <p class="privacy-note">Your file is read in this browser tab. It is never uploaded.</p>
+        <button id="sync-data" class="button primary" hidden>Sync Garmin</button>
+        <p class="privacy-note">The private dashboard keeps Garmin data and API keys on this Mac.</p>
       </div>
     </aside>
 
@@ -56,13 +57,19 @@
           <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">RECORDED MEASURE</p><h2 id="health-chart-title">Health trends</h2></div><select id="health-select" aria-label="Choose a health measure"></select></div><div id="health-trend" class="chart"></div><p class="chart-note">Dots are recorded readings. The line is a rolling seven-day mean; gaps stay visible.</p></article>
           <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">RUN EFFORT</p><h2>Heart rate on runs</h2></div><span class="unit-tag">bpm</span></div><div id="run-hr" class="chart"></div><p class="chart-note">Weekly median of recorded average run heart rates. Run type, route, heat and pace affect comparisons.</p></article>
           <article class="panel insight-panel"><p class="eyebrow">A CAREFUL COMPARISON</p><h2>Sleep score &amp; run effort</h2><p id="sleep-insight">Waiting for matching sleep and run data.</p><p class="chart-note">Same-calendar-day association only. This cannot show that sleep caused a workout result.</p></article>
-          <article class="panel insight-panel"><p class="eyebrow">FITNESS MARKER</p><h2>VO₂ max</h2><p id="vo2-copy">Checking the imported measures…</p><p class="chart-note">The chart only uses values present in the uploaded export.</p></article>
+          <article class="panel insight-panel"><p class="eyebrow">FITNESS MARKER</p><h2>VO₂ max</h2><p id="vo2-copy">Checking the loaded measures…</p><p class="chart-note">Only recorded values are shown; missing readings are not estimated.</p></article>
         </div>
       </section>
 
       <section class="page" id="plans-page">
-        <div class="page-heading"><div><p class="eyebrow">PLAN BUILDER</p><h1>Make the next block<br>fit your real week.</h1></div><p class="heading-note">Choose a focus and build a conservative starting template from your recent activity pattern.</p></div>
-        <article class="panel plan-builder"><div><p class="eyebrow">YOUR FOCUS</p><h2>What are you working toward?</h2></div><div class="plan-controls"><select id="plan-goal"><option value="5k">Improve my 5K</option><option value="10k">Build toward a 10K</option><option value="half">Prepare for a half marathon</option><option value="easy">Run easier at the same pace</option><option value="strength">Build strength consistently</option><option value="recovery">Balance training and recovery</option></select><button class="button primary" id="make-plan">Create a 4-week outline</button></div><div id="plan-result" class="plan-result" hidden></div></article>
+        <div class="page-heading"><div><p class="eyebrow">PLAN BUILDER</p><h1>Make the next block<br>fit your real week.</h1></div><p class="heading-note">Set a goal, pace and distance baseline, event date, and the number of sessions you can train. Each week includes a dated schedule.</p></div>
+        <article class="panel plan-builder">
+          <div class="plan-step"><p class="eyebrow">STEP 1 · GOAL</p><h2>What are you working toward?</h2><label class="plan-field">Training goal<select id="plan-goal"><option value="5k">Improve my 5K</option><option value="10k">Prepare for a 10K</option><option value="half">Prepare for a half marathon</option><option value="lower_hr">Lower heart rate at a comfortable pace</option><option value="distance">Build weekly running distance</option></select></label></div>
+          <div class="plan-step"><p class="eyebrow">STEP 2 · STARTING POINT</p><h2>What are you training from?</h2><div class="plan-input-grid"><label class="plan-field">Current weekly running distance<input id="plan-weekly-km" type="number" min="1" max="200" step="0.5" required><small>km/week · prefilled from recent complete weeks</small></label><label class="plan-field">Recent median run pace<input id="plan-pace" type="text" inputmode="numeric" placeholder="6:38" pattern="\d{1,2}:[0-5]\d" required><small>min:sec per km · e.g. 6:38</small></label><label class="plan-field">Goal finish time <span>(optional)</span><input id="plan-finish-time" type="text" inputmode="numeric" placeholder="28:00"><small>For race goals only · mm:ss or hh:mm:ss</small></label><label class="plan-field" id="plan-event-date-field">Race date <span>(optional)</span><input id="plan-event-date" type="date"><small>Plan length will end on this date</small></label></div></div>
+          <div class="plan-step"><p class="eyebrow">STEP 3 · YOUR SCHEDULE</p><h2>How many sessions can you do?</h2><div class="plan-input-grid"><label class="plan-field">Run sessions per week<select id="plan-sessions"><option value="2">2 sessions</option><option value="3" selected>3 sessions</option><option value="4">4 sessions</option><option value="5">5 sessions</option></select></label><label class="plan-field" id="plan-weeks-field">Plan length, if no race date<select id="plan-weeks"><option value="4">4 weeks</option><option value="6">6 weeks</option><option value="8" selected>8 weeks</option><option value="10">10 weeks</option><option value="12">12 weeks</option><option value="16">16 weeks</option></select></label><label class="plan-field">Preferred long-run day<select id="plan-long-day"><option value="sat" selected>Saturday</option><option value="sun">Sunday</option><option value="fri">Friday</option><option value="thu">Thursday</option><option value="wed">Wednesday</option><option value="tue">Tuesday</option><option value="mon">Monday</option></select></label></div><fieldset class="available-days"><legend>Days you are available to train</legend><div class="day-options"><label><input type="checkbox" value="mon" checked> Mon</label><label><input type="checkbox" value="tue"> Tue</label><label><input type="checkbox" value="wed" checked> Wed</label><label><input type="checkbox" value="thu"> Thu</label><label><input type="checkbox" value="fri"> Fri</label><label><input type="checkbox" value="sat" checked> Sat</label><label><input type="checkbox" value="sun"> Sun</label></div></fieldset></div>
+          <div class="plan-actions"><p id="plan-error" role="alert" hidden></p><button class="button primary" id="make-plan">Build my training plan</button></div>
+          <div id="plan-result" class="plan-result" hidden></div>
+        </article>
         <div class="saved-heading"><div><p class="eyebrow">IN THIS BROWSER</p><h2>Saved plans</h2></div><span class="unit-tag">stored on this device</span></div><div id="saved-plans" class="saved-plans"></div>
         <p class="disclaimer">Training outlines are general suggestions based on recorded sessions. They are not medical advice; adapt them to your experience, symptoms, and recovery.</p>
       </section>

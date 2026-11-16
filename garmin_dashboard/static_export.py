@@ -34,4 +34,24 @@ def build_static_export(activities: list[Activity], health_rows: list[dict[str, 
             "unit": row.get("Unit"),
         })
 
-    return {"schema_version": 1, "activities": activity_rows, "health": curated_health}
+    activity_dates = [row["date"][:10] for row in activity_rows if row.get("date")]
+    wellness_dates = [row["date"] for row in curated_health if row.get("date") and row.get("metric") != "Average heart rate on runs"]
+    return {
+        "schema_version": 1,
+        "source": "garmin_sqlite",
+        "metadata": {
+            "activity_count": len(activity_rows),
+            "date_range": {
+                "start": min(activity_dates) if activity_dates else None,
+                "end": max(activity_dates) if activity_dates else None,
+            },
+            "wellness_point_count": len(wellness_dates),
+            "wellness_date_range": {
+                "start": min(wellness_dates) if wellness_dates else None,
+                "end": max(wellness_dates) if wellness_dates else None,
+            },
+            "generated_at": datetime.now().astimezone().isoformat(),
+        },
+        "activities": activity_rows,
+        "health": curated_health,
+    }

@@ -37,6 +37,8 @@ def test_static_export_keeps_curated_metrics_and_drops_identifiers_and_treadmill
         "average_hr_bpm": 150,
     }
     assert data["health"][0]["date"] == "2026-11-10"
+    assert data["metadata"]["wellness_point_count"] == 1
+    assert data["metadata"]["wellness_date_range"] == {"start": "2026-11-10", "end": "2026-11-10"}
     serialized = str(data)
     assert "secret-garmin-id" not in serialized
     assert "userProfilePK" not in serialized
@@ -52,3 +54,20 @@ def test_static_export_preserves_missing_values_as_null():
     data = build_static_export([activity], [])
     assert data["activities"][0]["distance_km"] is None
     assert data["activities"][0]["average_hr_bpm"] is None
+
+
+def test_static_export_identifies_garmin_source_and_date_range():
+    activity = Activity(
+        activity_id="source-check",
+        started_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
+        activity_type="running",
+        distance_m=5000,
+        duration_s=1800,
+    )
+
+    data = build_static_export([activity], [])
+
+    assert data["source"] == "garmin_sqlite"
+    assert data["metadata"]["activity_count"] == 1
+    assert data["metadata"]["date_range"] == {"start": "2026-11-12", "end": "2026-11-12"}
+    assert "generated_at" in data["metadata"]

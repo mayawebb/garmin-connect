@@ -6,22 +6,12 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from ..analytics import format_pace_min_km, predicted_5k_trend
+from ..analytics import format_pace_min_km
+from ..chat_context import ACTIVITY_METRICS, HEALTH_PREFIX, training_context
 from ..chat import ChatError, ChartRequest, ask_openai, build_chart_data, generate_training_plan
 from ..config import OPENAI_API_KEY, OPENAI_MODEL
-from ..views.common import activity_context, activity_frame
+from ..views.common import activity_frame
 from ..wellness import wellness_metric_points
-
-
-ACTIVITY_METRICS = {
-    "distance_km": "Distance (km)",
-    "pace_min_km": "Pace (min/km)",
-    "duration_min": "Duration (min)",
-    "elevation_gain_m": "Elevation gain (m)",
-    "average_heart_rate_bpm": "Avg heart rate (bpm)",
-    "activity_count": "Activity count",
-}
-HEALTH_PREFIX = "health:"
 
 
 def render_training_chat(activities, snapshots, repository, *, current_page: str) -> None:
@@ -38,7 +28,7 @@ def render_training_chat(activities, snapshots, repository, *, current_page: str
     activity_metrics = dict(ACTIVITY_METRICS)
     health_metrics = sorted({point.metric for point in points})
     allowed_metrics = set(activity_metrics) | {HEALTH_PREFIX + metric for metric in health_metrics}
-    context = _training_context(activities, points)
+    context = training_context(activities, points)
     history = st.session_state.setdefault("global_chat_history", [])
 
     with st.popover("💬", key="global_training_chat", help="Ask about your Garmin training and health data", type="primary", width="content"):
@@ -81,37 +71,6 @@ def render_training_chat(activities, snapshots, repository, *, current_page: str
         if chart_request and chart_request.metric:
             _render_requested_chart(chart_request, activities, points)
         st.caption(f"Current context: {current_page.replace('_', ' ')} · charts use only available recorded metrics.")
-
-
-def _training_context(activities, points) -> str:
-    lines = [activity_context(activities)]
-    predictions = predicted_5k_trend(activities)
-    if predictions:
-        best = min(predictions, key=lambda row: row["predicted_5k_seconds"])
-        minutes, seconds = divmod(round(best["predicted_5k_seconds"]), 60)
-        lines.append(
-            f"Best recorded-effort 5K estimate: {minutes}:{seconds:02d}, derived from "
-            f"a {best['source_distance_km']:.1f} km outdoor activity on {best['date']:%Y-%m-%d} "
-            "using Riegel exponent 1.06; not a guaranteed race result."
-        )
-    else:
-        lines.append("5K estimate unavailable: no outdoor run of at least 2 km has both distance and duration.")
-
-    if points:
-        lines.append("Available health metric IDs for chart requests: " + ", ".join(HEALTH_PREFIX + metric for metric in sorted({p.metric for p in points})))
-        latest_by_metric = {}
-        for point in points:
-            latest_by_metric.setdefault(point.metric, []).append(point)
-        health = []
-        for metric, rows in latest_by_metric.items():
-            rows.sort(key=lambda item: item.day)
-            recent = rows[-28:]
-            health.append(f"{metric}: latest {rows[-1].value:g} on {rows[-1].day}; 28 recorded-point mean {sum(p.value for p in recent) / len(recent):.2f}")
-        lines.append("Health values: " + "; ".join(health[:40]))
-    else:
-        lines.append("No synced wellness values are available; health metrics are unknown.")
-    lines.append("Activity chart metric IDs: " + ", ".join(f"{key} ({value})" for key, value in ACTIVITY_METRICS.items()))
-    return "\n".join(lines)[:8000]
 
 
 def _is_plan_request(question: str) -> bool:

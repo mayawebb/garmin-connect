@@ -32,6 +32,23 @@ def test_openai_chat_uses_provided_context_and_parses_allowlisted_chart():
     assert seen["json"]["text"]["format"]["type"] == "json_schema"
 
 
+def test_openai_chart_instructions_distinguish_summary_context_from_full_chart_data():
+    seen = {}
+
+    def post(url, **kwargs):
+        seen.update(kwargs)
+        return FakeResponse(json.dumps({
+            "answer": "The chart uses the recorded weekly data.",
+            "chart": {"metric": "distance_km", "chart_type": "line", "group_by": "week"},
+        }))
+
+    ask_openai("Chart my weekly distance", {"distance_km"}, "aggregate distance summary", api_key="test-key", post=post)
+
+    instructions = seen["json"]["instructions"].lower()
+    assert "full activity records" in instructions
+    assert "do not say the data is missing" in instructions
+
+
 def test_openai_chat_rejects_unavailable_chart_metrics():
     def post(url, **kwargs):
         return FakeResponse(json.dumps({

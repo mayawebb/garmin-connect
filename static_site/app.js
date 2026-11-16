@@ -1,9 +1,11 @@
-import { buildRunningWeeks, classifyTrainingQuestion } from "./dashboard-logic.mjs";
+import { buildRunningWeeks, buildTrainingPlan, classifyTrainingQuestion, dashboardApiUrl, deriveRunBaseline, formatPace, normalizeChatResponse, normalizeDashboardData, parseFinishTime, parsePace, privateApiErrorMessage } from "./dashboard-logic.mjs";
 
 const COLORS = { green: "#a7d9bd", green2: "#5eaa82", gold: "#e5ad78", blue: "#94b4cf", purple: "#b7a5d4", muted: "#9aa79e", line: "#344139", panel: "#1b2520" };
 const SAMPLE_URL = "sample-data.json";
 let dataset = null;
 let usingSample = true;
+let backendMode = false;
+let chatHistory = [];
 let previousIntent = null;
 
 const $ = (selector) => document.querySelector(selector);
@@ -77,9 +79,7 @@ function renderAnalytics() {
   $("#analytics-metrics").innerHTML = values.map(([label, value, sub]) => `<div class="metric"><span class="metric-label">${esc(label)}</span><strong class="metric-value">${esc(value)}</strong><span class="metric-sub">${esc(sub)}</span></div>`).join("");
   const story = trainingStory(weeks, runs);
   $("#training-story .story-copy").textContent = story;
-  $("#source-notice").textContent = usingSample
-    ? "Synthetic sample data is showing—not your Garmin history. Use “Load my Garmin export” to view the records saved from your Garmin sync."
-    : "Using your locally imported Garmin export. This is the last data synced into the local app, not a live Garmin connection.";
+  $("#source-notice").textContent = dataSourceNote();
   $("#source-notice").classList.toggle("loaded", !usingSample);
   renderRunSuggestions(weeks, runs);
 
@@ -169,9 +169,7 @@ function renderActivityTable(activities) {
 const HEALTH_UNITS = { "Steps": "steps", "Resting heart rate": "bpm", "Daily minimum heart rate": "bpm", "Daily maximum heart rate": "bpm", "Body Battery": "score", "Body Battery charged": "score", "Average stress": "level", "Average respiration": "breaths/min", "Sleep score": "score", "Sleep duration": "hours", "Deep sleep": "hours", "REM sleep": "hours", "Average heart rate during sleep": "bpm", "Nightly HRV": "ms", "Weekly HRV average": "ms", "Average heart rate on runs": "bpm", "VO₂ max": "ml/kg/min", "VO2 max": "ml/kg/min" };
 function renderHealth() {
   const health = dataset.health || [];
-  const sourceNote = usingSample
-    ? "Synthetic sample wellness data is showing—not your Garmin history. Load your Garmin export to view your own measures."
-    : "Using wellness records from your local Garmin export. The export includes only measures actually returned and saved by Garmin.";
+  const sourceNote = dataSourceNote();
   $("#health-source-note").textContent = sourceNote;
   $("#health-source-note").classList.toggle("loaded", !usingSample);
   const names = [...new Set(health.map((x) => x.metric).filter(Boolean))].sort((a, b) => (a === "Average heart rate on runs" ? -1 : b === "Average heart rate on runs" ? 1 : a.localeCompare(b)));
@@ -194,7 +192,11 @@ function renderHealth() {
   renderSleepInsight(health, dataset.activities || []);
   renderHealthSuggestions(health);
   const vo2 = health.filter((x) => /vo.?2\s*max/i.test(x.metric || "") && isNumber(x.value));
-  $("#vo2-copy").textContent = vo2.length ? `${vo2.length} recorded VO₂ max value${vo2.length === 1 ? "" : "s"} are present; latest is ${vo2.at(-1).value.toFixed(1)} ${HEALTH_UNITS[vo2.at(-1).metric] || ""} on ${dateLabel(vo2.at(-1).date, { year: "numeric", month: "short", day: "numeric" })}.` : "No VO₂ max reading is present in the uploaded export. This dashboard does not estimate or invent one.";
+  $("#vo2-copy").textContent = vo2.length
+    ? `${vo2.length} recorded VO₂ max value${vo2.length === 1 ? "" : "s"} are present; latest is ${vo2.at(-1).value.toFixed(1)} ${HEALTH_UNITS[vo2.at(-1).metric] || ""} on ${dateLabel(vo2.at(-1).date, { year: "numeric", month: "short", day: "numeric" })}.`
+    : backendMode
+      ? "No VO₂ max value is present in the Garmin records synced to this local database. The current Personal API sync does not return one, so this dashboard leaves it unavailable instead of estimating it."
+      : "No VO₂ max reading is present in the loaded data. This dashboard does not estimate or invent one.";
 }
 function renderHealthSuggestions(health) {
   const cardMean = (metric, from, to, latestDate) => {
@@ -248,30 +250,75 @@ function renderSleepInsight(health, activities) {
   $("#sleep-insight").textContent = `Across ${matched.length} matched runs, the above-median sleep-score group was ${paceText} than the lower-score group. Its median run heart rate was ${hrText}.`;
 }
 
-const PLAN_TEMPLATES = {
-  "5k": ["Easy run 30–40 min + 4 relaxed strides", "5 × 3 min comfortably hard; 2 min easy jog", "Easy run 30 min or strength session", "Long easy run 45–55 min"],
-  "10k": ["Easy run 35–45 min", "3 × 8 min steady; 3 min easy jog", "Easy run 30 min + strength", "Long easy run 55–70 min"],
-  half: ["Easy run 40–50 min", "4 × 6 min steady; 2 min easy jog", "Recovery jog 25–35 min + strength", "Long easy run 65–80 min"],
-  easy: ["Easy conversational run 30–40 min", "Easy run 35 min; keep effort comfortable", "Strength or mobility; no hard running", "Easy run 40–50 min, relaxed finish"],
-  strength: ["Full-body strength A; moderate loads", "Easy cardio 25–40 min", "Full-body strength B; leave 2 reps in reserve", "Optional mobility or easy walk"],
-  recovery: ["Easy run or walk 25–35 min", "Mobility or yoga 20–30 min", "Easy conversational cardio 30–40 min", "Rest day; optional gentle walk"],
-};
-const PLAN_TITLES = { "5k": "5K speed foundation", "10k": "10K steady build", half: "Half-marathon base", easy: "Easier aerobic running", strength: "Consistent strength week", recovery: "Balanced training and recovery" };
 let currentPlan = null;
 function makePlan() {
-  const goal = $("#plan-goal").value; const runs = (dataset.activities || []).filter(running); const counts = getWeeks(dataset.activities || []).slice(-4).map((w) => w.runs); const sessions = Math.max(2, Math.min(5, Math.round(average(counts) || 3)));
-  const weeks = PLAN_TEMPLATES[goal].map((item, i) => ({ week: i + 1, sessions, focus: item }));
-  currentPlan = { id: Date.now(), goal, title: PLAN_TITLES[goal], createdAt: new Date().toISOString(), weeks };
+  const error = $("#plan-error"); error.hidden = true; error.textContent = "";
+  const goal = $("#plan-goal").value;
+  const eventDate = $("#plan-event-date").value || null;
+  const startDate = nextPlanMonday();
+  let durationWeeks = Number($("#plan-weeks").value);
+  if (eventDate) {
+    const race = new Date(`${eventDate}T00:00:00`); const start = new Date(`${startDate}T00:00:00`);
+    const daysUntilRace = Math.floor((race - start) / 86400000);
+    if (daysUntilRace < 0) { error.textContent = "Choose a race date on or after the next plan start date."; error.hidden = false; return; }
+    durationWeeks = Math.floor(daysUntilRace / 7) + 1;
+  }
+  const baselinePace = parsePace($("#plan-pace").value);
+  const targetFinishSeconds = parseFinishTime($("#plan-finish-time").value);
+  const isRaceGoal = ["5k", "10k", "half"].includes(goal);
+  if (isRaceGoal && $("#plan-finish-time").value.trim() && !targetFinishSeconds) {
+    error.textContent = "Enter a finish time as mm:ss or hh:mm:ss."; error.hidden = false; return;
+  }
+  try {
+    currentPlan = buildTrainingPlan({
+      goal,
+      weeklySessions: Number($("#plan-sessions").value),
+      availableDays: [...document.querySelectorAll(".day-options input:checked")].map((input) => input.value),
+      longRunDay: $("#plan-long-day").value,
+      durationWeeks,
+      weeklyDistanceKm: Number($("#plan-weekly-km").value),
+      medianPaceMinKm: baselinePace,
+      targetFinishSeconds: isRaceGoal && $("#plan-finish-time").value.trim() ? targetFinishSeconds : null,
+      eventDate,
+      startDate,
+    });
+  } catch (reason) {
+    error.textContent = reason.message || "Check the plan settings and try again."; error.hidden = false; return;
+  }
   renderPlan(currentPlan); $("#plan-result").hidden = false;
 }
+function nextPlanMonday(now = new Date()) {
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  monday.setDate(monday.getDate() + ((8 - monday.getDay()) % 7));
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+}
+function populatePlanInputs() {
+  const baseline = deriveRunBaseline(dataset?.activities || []);
+  if (Number.isFinite(baseline.weeklyDistanceKm) && baseline.weeklyDistanceKm > 0) $("#plan-weekly-km").value = String(Math.round(baseline.weeklyDistanceKm * 2) / 2);
+  else $("#plan-weekly-km").value = "";
+  if (Number.isFinite(baseline.medianPaceMinKm) && baseline.medianPaceMinKm > 0) $("#plan-pace").value = formatPace(baseline.medianPaceMinKm).replace("/km", "");
+  else $("#plan-pace").value = "";
+  updateGoalFields();
+}
+function updateGoalFields() {
+  const goal = $("#plan-goal").value;
+  const raceGoal = ["5k", "10k", "half"].includes(goal);
+  const finishField = $("#plan-finish-time").closest("label");
+  const raceDateField = $("#plan-event-date-field");
+  finishField.hidden = !raceGoal;
+  raceDateField.hidden = !raceGoal;
+  if (!raceGoal) $("#plan-event-date").value = "";
+  $("#plan-weeks").disabled = Boolean($("#plan-event-date").value);
+}
 function renderPlan(plan) {
-  $("#plan-result").innerHTML = `<h3>${esc(plan.title)}</h3><p>Four-week outline · based on ${((dataset.activities || []).filter(running)).length} recorded runs · adjust volume to what feels sustainable.</p><div class="week-list">${plan.weeks.map((week) => `<div class="week-card"><b>WEEK ${week.week} / ${week.sessions} SESSIONS</b><p>${esc(week.focus)}</p></div>`).join("")}</div><button class="button primary" id="save-plan">Save this plan</button>`;
+  const endLine = plan.eventDate ? ` · race day ${esc(plan.eventDate)}` : ` · starts ${esc(plan.weeks[0]?.starting || "")}`;
+  $("#plan-result").innerHTML = `<div class="plan-result-head"><div><p class="eyebrow">YOUR PERSONAL TRAINING BLOCK</p><h3>${esc(plan.title)}</h3><p>${plan.durationWeeks} weeks · ${plan.weeklySessions} sessions/week · long run ${esc(plan.longRunDay)} · ${plan.baselineWeeklyKm.toFixed(1)} km/week starting volume${endLine}</p><p class="pace-note">${esc(plan.paceNote)}</p></div><button class="button primary" id="save-plan">Save this plan</button></div><div class="week-list">${plan.weeks.map((week) => `<section class="week-card"><div class="week-card-head"><b>WEEK ${week.week}</b><span>${week.totalDistanceKm.toFixed(1)} km</span></div><time>${esc(week.starting)} · ${week.sessions.length} sessions</time><p>${esc(week.focus)}</p><div class="workout-list">${week.sessions.map((session) => `<article><b>${esc(session.day)} · ${esc(session.title)}</b><span>${session.distanceKm.toFixed(1)} km · ${esc(session.paceTarget)}</span><small>${esc(session.details)}</small></article>`).join("")}</div></section>`).join("")}</div>`;
   $("#save-plan").addEventListener("click", () => { const saved = readPlans(); saved.unshift(plan); localStorage.setItem("training-lab-plans", JSON.stringify(saved.slice(0, 20))); renderSavedPlans(); toast("Plan saved in this browser."); });
 }
 function readPlans() { try { const plans = JSON.parse(localStorage.getItem("training-lab-plans") || "[]"); return Array.isArray(plans) ? plans : []; } catch { return []; } }
 function renderSavedPlans() {
   const plans = readPlans();
-  $("#saved-plans").innerHTML = plans.length ? plans.map((plan) => `<article class="saved-card"><time>${esc(new Date(plan.createdAt).toLocaleDateString())}</time><h3>${esc(plan.title)}</h3><p>4-week outline · ${esc(plan.weeks?.[0]?.sessions ?? "—")} sessions per week</p><button data-delete-plan="${Number(plan.id)}">Delete plan</button></article>`).join("") : '<p class="empty-saved">No plans saved on this device yet.</p>';
+  $("#saved-plans").innerHTML = plans.length ? plans.map((plan) => `<article class="saved-card"><time>${esc(new Date(plan.createdAt).toLocaleDateString())}</time><h3>${esc(plan.title)}</h3><p>${plan.durationWeeks ?? plan.weeks?.length ?? "—"} weeks · ${plan.weeklySessions ?? plan.weeks?.[0]?.sessions ?? "—"} sessions per week${Number.isFinite(plan.baselineWeeklyKm) ? ` · starting at ${plan.baselineWeeklyKm.toFixed(1)} km/week` : ""}</p><button data-delete-plan="${Number(plan.id)}">Delete plan</button></article>`).join("") : '<p class="empty-saved">No plans saved on this device yet.</p>';
   document.querySelectorAll("[data-delete-plan]").forEach((button) => button.addEventListener("click", () => { localStorage.setItem("training-lab-plans", JSON.stringify(readPlans().filter((plan) => plan.id !== Number(button.dataset.deletePlan)))); renderSavedPlans(); }));
 }
 
@@ -339,19 +386,90 @@ function toast(message) { const node = $("#toast"); node.textContent = message; 
 
 function renderPage(name) { if (name === "analytics") renderAnalytics(); if (name === "health") renderHealth(); if (name === "plans") renderSavedPlans(); }
 function validateData(data) {
-  if (!data || data.schema_version !== 1 || !Array.isArray(data.activities) || !Array.isArray(data.health)) throw new Error("This file is not a supported Training Lab export (schema version 1). Download a fresh export from the local dashboard.");
-  for (const activity of data.activities) if (!activity || typeof activity !== "object" || typeof activity.date !== "string" || typeof activity.type !== "string") throw new Error("An activity row is missing its date or activity type.");
-  return { schema_version: 1, activities: data.activities.filter((a) => !/treadmill/i.test(a.type)).map((a) => ({ date: a.date, type: a.type, distance_km: isNumber(a.distance_km) ? a.distance_km : null, duration_s: isNumber(a.duration_s) ? a.duration_s : null, elevation_m: isNumber(a.elevation_m) ? a.elevation_m : null, average_hr_bpm: isNumber(a.average_hr_bpm) ? a.average_hr_bpm : null })), health: data.health.filter((x) => x && typeof x.metric === "string").map((x) => ({ date: x.date, metric: x.metric, value: isNumber(x.value) ? x.value : null, unit: typeof x.unit === "string" ? x.unit : "" })) };
+  try { return normalizeDashboardData(data); }
+  catch (error) { throw new Error(`This is not a supported Training Lab export: ${error.message}`); }
 }
-async function loadSample() { const response = await fetch(SAMPLE_URL); if (!response.ok) throw new Error("Synthetic sample data could not be loaded."); dataset = validateData(await response.json()); usingSample = true; updateSource(); renderPage("analytics"); renderSavedPlans(); }
+async function loadSample() { const response = await fetch(SAMPLE_URL); if (!response.ok) throw new Error("Synthetic sample data could not be loaded."); dataset = validateData(await response.json()); usingSample = true; backendMode = false; $("#sync-data").hidden = true; updateSource(); renderPage("analytics"); renderSavedPlans(); }
+async function loadBackendData() {
+  const response = await fetch(dashboardApiUrl("dashboard-data"), { headers: { Accept: "application/json" } });
+  if (!response.ok) return false;
+  const payload = validateData(await response.json());
+  if (payload.source !== "garmin_sqlite") return false;
+  dataset = payload; usingSample = false; backendMode = true; $("#sync-data").hidden = false;
+  updateSource(); renderPage("analytics"); renderSavedPlans();
+  return true;
+}
+function dateRangeLabel() {
+  const range = dataset?.metadata?.date_range;
+  if (!range?.start || !range?.end) return "no dated activities";
+  return range.start === range.end ? `through ${range.end}` : `${range.start} to ${range.end}`;
+}
+function wellnessRangeLabel() {
+  const range = dataset?.metadata?.wellness_date_range;
+  if (!range?.start || !range?.end) return "no wellness date range";
+  return range.start === range.end ? `on ${range.end}` : `${range.start} to ${range.end}`;
+}
+function dataSourceNote() {
+  if (usingSample) return "Synthetic sample data is showing—not your Garmin history. Use “Load my Garmin export” to view the records saved from your Garmin sync.";
+  if (backendMode) return `Garmin Connect Personal API records, read from the local SQLite database. ${dataset.metadata?.activity_count ?? 0} activities (${dateRangeLabel()}); ${dataset.metadata?.wellness_point_count ?? 0} wellness readings (${wellnessRangeLabel()}).`;
+  return "Using a Garmin export uploaded into this browser tab. This is the last data saved from Garmin, not a live connection.";
+}
 function updateSource() {
-  const label = usingSample ? "Synthetic sample" : "Your Garmin export";
+  const label = usingSample ? "Synthetic sample" : backendMode ? "Your Garmin API data · local DB" : "Your Garmin export";
   $("#data-source").textContent = label;
-  $("#data-source-top").textContent = usingSample ? "SYNTHETIC SAMPLE" : "GARMIN EXPORT · LOCAL";
+  $("#data-source-top").textContent = usingSample ? "SYNTHETIC SAMPLE" : backendMode ? `GARMIN API DATA · ${dateRangeLabel()}` : "GARMIN EXPORT · BROWSER";
   $(".state-dot").classList.toggle("loaded", !usingSample);
   $(".chat-welcome").textContent = usingSample
-    ? "This page is using synthetic sample data. Load your Garmin export to ask about your own metrics. Answers here use local rules, not OpenAI."
-    : "Your Garmin export is loaded in this tab. Ask about your metrics; answers here use local rules, not OpenAI.";
+    ? "This page is using synthetic sample data. Load your Garmin export to ask about your own metrics."
+    : backendMode ? "Your synced Garmin activity and health data is loaded. Ask a question or request a chart."
+      : "Your Garmin export is loaded in this tab. Ask about your metrics.";
+  $(".chat-foot").textContent = backendMode
+    ? "OpenAI receives your question and a compact summary of this data. The API key and Garmin database stay on this Mac."
+    : usingSample ? "Demo answers use synthetic sample data and local rules. The public GitHub Pages site cannot access your .env key."
+      : "This uploaded export stays in this browser tab. Answers use local rules and are not sent to OpenAI.";
+}
+
+async function sendBackendChat(question) {
+  const history = chatHistory.slice(-8);
+  chatHistory.push({ role: "user", content: question });
+  const response = await fetch(dashboardApiUrl("chat"), {
+    method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ question, history }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.detail || privateApiErrorMessage(response.status));
+  const result = normalizeChatResponse(payload);
+  chatHistory.push({ role: "assistant", content: result.answer });
+  addChat(result.answer, "assistant");
+  if (result.chart) addChatChart(result.chart);
+}
+function addChatChart(chart) {
+  if (!window.Plotly || !chart.rows.length) return;
+  const card = document.createElement("div"); card.className = "chat-chart-card";
+  const title = document.createElement("p"); title.className = "eyebrow"; title.textContent = `${chart.metric} · ${chart.unit}`;
+  const plot = document.createElement("div"); plot.className = "chat-chart";
+  card.append(title, plot); $("#chat-messages").append(card);
+  const trace = chart.chart_type === "bar"
+    ? { type: "bar", x: chart.rows.map((row) => row.x), y: chart.rows.map((row) => row.value), marker: { color: COLORS.green2 } }
+    : { type: "scatter", x: chart.rows.map((row) => row.x), y: chart.rows.map((row) => row.value), mode: "lines+markers", line: { color: COLORS.green, width: 2 } };
+  window.Plotly.newPlot(plot, [trace], {
+    paper_bgcolor: "#17211c", plot_bgcolor: "#17211c", font: { color: "#dce6df", size: 10 },
+    margin: { l: 42, r: 8, t: 8, b: 42 }, xaxis: { gridcolor: "#2b3830", automargin: true },
+    yaxis: { gridcolor: "#2b3830", rangemode: "tozero", automargin: true }, showlegend: false,
+  }, { displayModeBar: false, responsive: true });
+  $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight;
+}
+async function syncGarmin() {
+  const button = $("#sync-data"); button.disabled = true; button.textContent = "Syncing…";
+  try {
+    const response = await fetch(dashboardApiUrl("sync"), { method: "POST", headers: { Accept: "application/json" } });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.detail || `Sync failed (HTTP ${response.status}).`);
+    await loadBackendData();
+    const a = payload.activities; const w = payload.wellness;
+    toast(`Sync: ${a.imported} activity changes; ${w.imported} wellness updates; ${a.failed + w.failed} failures.`);
+  } catch (error) { toast(error.message || "Garmin sync failed."); }
+  finally { button.disabled = false; button.textContent = "Sync Garmin"; }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -360,17 +478,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   const initialPage = ["analytics", "health", "plans"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "analytics";
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.page === initialPage));
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === `${initialPage}-page`));
-  try { await loadSample(); setPage(initialPage); } catch (error) { $("#data-source").textContent = "Sample unavailable"; $("#analytics-metrics").textContent = error.message; }
+  try { if (!await loadBackendData()) await loadSample(); setPage(initialPage); populatePlanInputs(); } catch (error) { $("#data-source").textContent = "Sample unavailable"; $("#analytics-metrics").textContent = error.message; }
   $("#data-file").addEventListener("change", async (event) => {
     const file = event.target.files?.[0]; if (!file) return;
-    try { dataset = validateData(JSON.parse(await file.text())); usingSample = false; updateSource(); renderPage("analytics"); renderSavedPlans(); toast("Your export is loaded in this browser tab."); }
+    try { dataset = validateData(JSON.parse(await file.text())); usingSample = false; backendMode = false; $("#sync-data").hidden = true; updateSource(); renderPage("analytics"); renderSavedPlans(); toast("Your export is loaded in this browser tab."); }
     catch (error) { toast(error.message || "Could not read that JSON file."); }
     event.target.value = "";
   });
   $("#reset-sample").addEventListener("click", () => loadSample().then(() => toast("Synthetic sample data restored.")).catch((error) => toast(error.message)));
+  $("#sync-data").addEventListener("click", syncGarmin);
   $("#health-select").addEventListener("change", renderHealthTrend);
-  $("#make-plan").addEventListener("click", makePlan); renderSavedPlans();
+  $("#make-plan").addEventListener("click", makePlan);
+  $("#plan-goal").addEventListener("change", updateGoalFields);
+  $("#plan-event-date").addEventListener("change", updateGoalFields);
+  renderSavedPlans();
   $("#chat-launcher").addEventListener("click", () => { $("#chat-panel").hidden = !$("#chat-panel").hidden; if (!$("#chat-panel").hidden) $("#chat-input").focus(); });
   $("#chat-close").addEventListener("click", () => { $("#chat-panel").hidden = true; });
-  $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); const input = $("#chat-input"); const question = input.value.trim(); if (!question || !dataset) return; addChat(question, "user"); input.value = ""; addChat(answerQuestion(question), "assistant"); });
+  $("#chat-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const input = $("#chat-input"); const question = input.value.trim(); if (!question || !dataset) return;
+    addChat(question, "user"); input.value = "";
+    if (backendMode) {
+      const button = $("#chat-form button"); button.disabled = true;
+      try { await sendBackendChat(question); }
+      catch (error) { const message = error.message || "OpenAI chat is unavailable."; addChat(message, "assistant"); chatHistory.push({ role: "assistant", content: message }); }
+      finally { button.disabled = false; }
+    } else addChat(answerQuestion(question), "assistant");
+  });
 });
