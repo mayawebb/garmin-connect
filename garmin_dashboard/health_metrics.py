@@ -1,8 +1,9 @@
 """Curated health series from documented, present Garmin fields."""
 
 from .models import Activity
-from .analytics import is_running_type
+from .analytics import is_running_type, pace_minutes_per_km
 from .wellness import WellnessMetricPoint
+from statistics import median
 
 
 SERIES = {
@@ -40,3 +41,38 @@ def health_trend_rows(points: list[WellnessMetricPoint], activities: list[Activi
                 "Unit": "bpm",
             })
     return rows
+
+
+def sleep_run_association(activities: list[Activity], points: list[WellnessMetricPoint]) -> dict | None:
+    """Compare outdoor-run effort across same-calendar-date sleep-score bands.
+
+    This is descriptive only: it does not imply sleep scores caused a run's
+    pace or heart rate. Runs need both pace and heart rate to be included.
+    """
+    sleep_scores = {
+        point.day: point.value
+        for point in points
+        if point.metric == "sleep_summaries.sleepScores.overall.value"
+    }
+    matched = []
+    for activity in activities:
+        day = activity.started_at.date()
+        pace = pace_minutes_per_km(activity.distance_km, activity.duration_s)
+        sleep_score = sleep_scores.get(day)
+        if is_running_type(activity.activity_type) and pace is not None and activity.average_heart_rate_bpm is not None and sleep_score is not None:
+            matched.append((sleep_score, pace, float(activity.average_heart_rate_bpm)))
+    if len(matched) < 2:
+        return None
+
+    threshold = median(row[0] for row in matched)
+    groups = {}
+    for label, rows in (
+        ("At or below median", [row for row in matched if row[0] <= threshold]),
+        ("Above median", [row for row in matched if row[0] > threshold]),
+    ):
+        groups[label] = {
+            "run_count": len(rows),
+            "median_pace_min_km": median(row[1] for row in rows) if rows else None,
+            "median_heart_rate_bpm": median(row[2] for row in rows) if rows else None,
+        }
+    return {"matched_run_count": len(matched), "sleep_score_median": threshold, "groups": groups}

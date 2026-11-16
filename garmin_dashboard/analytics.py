@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import timedelta
+import math
 from statistics import fmean, median
 
 from .activity_streams import ActivityStreamPoint
@@ -13,6 +14,25 @@ def pace_minutes_per_km(distance_km: float | None, duration_seconds: float | Non
     if distance_km is None or duration_seconds is None or distance_km <= 0 or duration_seconds <= 0:
         return None
     return duration_seconds / 60 / distance_km
+
+
+def format_pace_min_km(pace_minutes: float | None) -> str:
+    """Format decimal minutes per kilometer as a readable min:sec pace."""
+    if pace_minutes is None or not math.isfinite(float(pace_minutes)) or pace_minutes <= 0:
+        return "Unavailable"
+    total_seconds = round(pace_minutes * 60)
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{seconds:02d} /km"
+
+
+def format_duration_seconds(duration_seconds: float | None) -> str:
+    """Format a duration as hours:minutes:seconds or minutes:seconds."""
+    if duration_seconds is None or not math.isfinite(float(duration_seconds)) or duration_seconds < 0:
+        return "Unavailable"
+    total_seconds = round(duration_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
 def is_running_type(activity_type: str) -> bool:
@@ -35,6 +55,35 @@ def weekly_running_distance(activities: list[Activity]) -> list[dict]:
     return [weeks[week] for week in sorted(weeks)]
 
 
+def weekly_running_distance_calendar(activities: list[Activity]) -> list[dict]:
+    """Return a continuous calendar-week series across the recorded history.
+
+    Weeks with no run record are zero. A week containing only runs with unknown
+    distance stays unknown rather than being silently counted as zero.
+    """
+    if not activities:
+        return []
+    active_weeks = {row["week_start"]: row for row in weekly_running_distance(activities)}
+    first_day = min(activity.started_at.date() for activity in activities)
+    last_day = max(activity.started_at.date() for activity in activities)
+    first_week = first_day - timedelta(days=first_day.weekday())
+    last_week = last_day - timedelta(days=last_day.weekday())
+    rows = []
+    week = first_week
+    while week <= last_week:
+        if week in active_weeks:
+            row = active_weeks[week]
+            rows.append({
+                "week_start": week,
+                "distance_km": row["distance_km"],
+                "run_count": row["run_count"],
+            })
+        else:
+            rows.append({"week_start": week, "distance_km": 0.0, "run_count": 0})
+        week += timedelta(days=7)
+    return rows
+
+
 def median_running_pace(activities: list[Activity]) -> float | None:
     """Return the median recorded outdoor-run pace in minutes per kilometer."""
     paces = [
@@ -47,8 +96,12 @@ def median_running_pace(activities: list[Activity]) -> float | None:
 
 
 def average_weekly_running_distance(activities: list[Activity]) -> float | None:
-    """Average known distances over weeks containing outdoor runs with distance."""
-    weekly = weekly_running_distance(activities)
+    """Average outdoor running distance per observed calendar week.
+
+    Complete weeks with no run record count as zero. Weeks with runs but no
+    recorded distance are excluded because their volume is unknown.
+    """
+    weekly = weekly_running_distance_calendar(activities)
     observed_weeks = [row["distance_km"] for row in weekly if row["distance_km"] is not None]
     return fmean(observed_weeks) if observed_weeks else None
 

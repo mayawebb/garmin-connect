@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121816">
+  <meta name="description" content="A private, browser-local training and health dashboard for Garmin exports.">
+  <title>Training Lab · Garmin dashboard</title>
+  <link rel="preconnect" href="https://cdn.plot.ly" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <a class="brand" href="#analytics" aria-label="Training Lab home"><span class="brand-mark">TL</span><span>TRAINING<br>LAB</span></a>
+      <p class="rail-label">YOUR DATA</p>
+      <nav aria-label="Dashboard sections">
+        <button class="nav-item active" data-page="analytics"><span>↗</span>Analytics</button>
+        <button class="nav-item" data-page="health"><span>♡</span>Health</button>
+        <button class="nav-item" data-page="plans"><span>▤</span>Training plans</button>
+      </nav>
+      <div class="rail-bottom">
+        <div class="data-state"><span class="state-dot"></span><span id="data-source">Synthetic sample</span></div>
+        <label class="button secondary import-label" for="data-file">Load my export</label>
+        <input id="data-file" type="file" accept="application/json,.json" hidden>
+        <button id="reset-sample" class="text-button">Return to sample data</button>
+        <p class="privacy-note">Your file is read in this browser tab. It is never uploaded.</p>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar"><span>PERSONAL PERFORMANCE / <span id="today-label"></span></span><span class="topbar-right">GARMIN DATA · LOCAL VIEW</span></header>
+      <section class="page active" id="analytics-page">
+        <div class="page-heading"><div><p class="eyebrow">TRAINING LOAD · RUNNING</p><h1>Build a clearer<br>picture of your training.</h1></div><p class="heading-note">Weekly volume, run effort, and activity mix—read as trends, not isolated numbers.</p></div>
+        <div class="metric-row" id="analytics-metrics"></div>
+        <section class="story-band" id="training-story"><span class="story-mark">↗</span><div><p class="eyebrow">RECENT BLOCK</p><p class="story-copy">Loading your training story…</p></div></section>
+        <div class="chart-grid">
+          <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">VOLUME</p><h2>Weekly running distance</h2></div><span class="unit-tag">km / calendar week</span></div><div id="weekly-distance" class="chart"></div><p class="chart-note">Bars show recorded distance. The line smooths the last four calendar weeks; weeks without runs count as 0 km.</p></article>
+          <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">EFFORT</p><h2>Typical run pace</h2></div><span class="unit-tag">min/km</span></div><div id="pace-trend" class="chart"></div><p class="chart-note">Each point is one run’s average pace, shown as minutes:seconds per kilometer. Lower is faster.</p></article>
+          <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">PERFORMANCE INDICATOR</p><h2>5 km equivalent</h2></div><span class="unit-tag">elapsed time</span></div><div id="race-trend" class="chart"></div><p class="chart-note">A rough distance-based estimate from runs of 2 km or longer. It is not a race result or guaranteed PR.</p></article>
+          <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">ALL SPORTS</p><h2>Your activity mix</h2></div><span class="unit-tag">sessions / week</span></div><div id="activity-mix" class="chart"></div><p class="chart-note">Non-running activities remain visible here. Treadmill runs are omitted from this dashboard.</p></article>
+        </div>
+        <article class="panel table-panel"><div class="panel-head"><div><p class="eyebrow">RECENT SESSIONS</p><h2>Activity log</h2></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Activity</th><th>Distance</th><th>Duration</th><th>Elevation</th><th>Pace</th><th>Avg HR</th></tr></thead><tbody id="activity-table"></tbody></table></div></article>
+      </section>
+
+      <section class="page" id="health-page">
+        <div class="page-heading"><div><p class="eyebrow">RECOVERY · WELLNESS</p><h1>Signals that shape<br>how you feel.</h1></div><p class="heading-note">A readable view of your recorded health measures. Missing metrics stay missing; no synthetic readiness score.</p></div>
+        <div class="health-cards" id="health-cards"></div>
+        <div class="chart-grid health-grid">
+          <article class="panel chart-panel wide"><div class="panel-head"><div><p class="eyebrow">RECORDED MEASURE</p><h2 id="health-chart-title">Health trends</h2></div><select id="health-select" aria-label="Choose a health measure"></select></div><div id="health-trend" class="chart"></div><p class="chart-note">Dots are recorded readings. The line is a rolling seven-day mean; gaps stay visible.</p></article>
+          <article class="panel chart-panel"><div class="panel-head"><div><p class="eyebrow">RUN EFFORT</p><h2>Heart rate on runs</h2></div><span class="unit-tag">bpm</span></div><div id="run-hr" class="chart"></div><p class="chart-note">Weekly median of recorded average run heart rates. Run type, route, heat and pace affect comparisons.</p></article>
+          <article class="panel insight-panel"><p class="eyebrow">A CAREFUL COMPARISON</p><h2>Sleep score &amp; run effort</h2><p id="sleep-insight">Waiting for matching sleep and run data.</p><p class="chart-note">Same-calendar-day association only. This cannot show that sleep caused a workout result.</p></article>
+          <article class="panel insight-panel"><p class="eyebrow">FITNESS MARKER</p><h2>VO₂ max</h2><p id="vo2-copy">Checking the imported measures…</p><p class="chart-note">The chart only uses values present in the uploaded export.</p></article>
+        </div>
+      </section>
+
+      <section class="page" id="plans-page">
+        <div class="page-heading"><div><p class="eyebrow">PLAN BUILDER</p><h1>Make the next block<br>fit your real week.</h1></div><p class="heading-note">Choose a focus and build a conservative starting template from your recent activity pattern.</p></div>
+        <article class="panel plan-builder"><div><p class="eyebrow">YOUR FOCUS</p><h2>What are you working toward?</h2></div><div class="plan-controls"><select id="plan-goal"><option value="5k">Improve my 5K</option><option value="10k">Build toward a 10K</option><option value="half">Prepare for a half marathon</option><option value="easy">Run easier at the same pace</option><option value="strength">Build strength consistently</option><option value="recovery">Balance training and recovery</option></select><button class="button primary" id="make-plan">Create a 4-week outline</button></div><div id="plan-result" class="plan-result" hidden></div></article>
+        <div class="saved-heading"><div><p class="eyebrow">IN THIS BROWSER</p><h2>Saved plans</h2></div><span class="unit-tag">stored on this device</span></div><div id="saved-plans" class="saved-plans"></div>
+        <p class="disclaimer">Training outlines are general suggestions based on recorded sessions. They are not medical advice; adapt them to your experience, symptoms, and recovery.</p>
+      </section>
+      <footer>TRAINING LAB <span>Built for your own training history.</span></footer>
+    </main>
+  </div>
+  <button id="chat-launcher" class="chat-launcher" aria-label="Ask about your training" title="Ask about your training">✳</button>
+  <aside class="chat-panel" id="chat-panel" aria-label="Training chat" hidden><div class="chat-head"><div><p class="eyebrow">LOCAL TRAINING CHAT</p><strong>Ask your data</strong></div><button id="chat-close" class="close-button" aria-label="Close chat">×</button></div><div class="chat-messages" id="chat-messages"><p class="chat-welcome">Ask about distance, pace, heart rate, sleep, or activity types. Answers are computed in this browser.</p></div><form id="chat-form"><input id="chat-input" autocomplete="off" placeholder="Ask about your training…" aria-label="Ask about your training"><button aria-label="Send message">↑</button></form><p class="chat-foot">No OpenAI or Garmin request is made from this public static site.</p></aside>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

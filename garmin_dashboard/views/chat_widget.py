@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from ..analytics import predicted_5k_trend
+from ..analytics import format_pace_min_km, predicted_5k_trend
 from ..chat import ChatError, ChartRequest, ask_openai, build_chart_data, generate_training_plan
 from ..config import OPENAI_API_KEY, OPENAI_MODEL
 from ..views.common import activity_context, activity_frame
@@ -130,7 +130,17 @@ def _render_requested_chart(request: ChartRequest, activities, points) -> None:
     if frame.empty:
         st.info("There are no recorded values for that chart request.")
         return
-    chart = px.line(frame, x=x_column, y=value_column, markers=True) if request.chart_type == "line" else px.bar(frame, x=x_column, y=value_column)
+    if request.metric == "pace_min_km":
+        frame["Pace (min:sec/km)"] = frame[value_column].map(format_pace_min_km)
+        hover_data = {"Pace (min:sec/km)": True, value_column: False}
+        chart = px.line(frame, x=x_column, y=value_column, markers=True, hover_data=hover_data) if request.chart_type == "line" else px.bar(frame, x=x_column, y=value_column, hover_data=hover_data)
+        clean = pd.to_numeric(frame[value_column], errors="coerce").dropna()
+        if not clean.empty:
+            lower, upper = int(clean.min() * 4), int(clean.max() * 4 + 0.999)
+            ticks = [value / 4 for value in range(lower, upper + 1, 2)]
+            chart.update_yaxes(tickmode="array", tickvals=ticks, ticktext=[format_pace_min_km(value).replace(" /km", "") for value in ticks], autorange="reversed", title="Pace (min:sec/km; faster up)")
+    else:
+        chart = px.line(frame, x=x_column, y=value_column, markers=True) if request.chart_type == "line" else px.bar(frame, x=x_column, y=value_column)
     st.plotly_chart(chart, width="stretch", theme=None)
 
 

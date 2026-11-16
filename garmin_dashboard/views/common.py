@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from ..analytics import is_running_type, pace_minutes_per_km
+from ..analytics import format_pace_min_km, is_running_type, pace_minutes_per_km
 
 
 def activity_frame(activities):
@@ -43,10 +43,13 @@ def activity_context(activities) -> str:
     result = [f"Synced activities: {len(frame)} across {frame['Type'].nunique()} types"]
     if not run_frame.empty:
         result.append(f"Running records: {len(run_frame)}")
-        for column in ("Distance (km)", "Duration (min)", "Pace (min/km)", "Avg heart rate (bpm)"):
+        for column in ("Distance (km)", "Duration (min)", "Avg heart rate (bpm)"):
             values = run_frame[column].dropna()
             if not values.empty:
                 result.append(f"Run {column}: mean {values.mean():.1f}; latest {values.iloc[-1]:.1f}")
+        paces = run_frame["Pace (min/km)"].dropna()
+        if not paces.empty:
+            result.append(f"Outdoor-run median pace: {format_pace_min_km(paces.median())}; latest recorded pace: {format_pace_min_km(paces.iloc[-1])}")
     for activity_type, group in frame.groupby("Type"):
         result.append(f"{activity_type}: {len(group)} sessions")
     return "; ".join(result)

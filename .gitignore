@@ -8,6 +8,8 @@
 *.sqlite
 *.sqlite3
 data/
+garmin-dashboard-export*.json
+*personal-export*.json
 
 # Python
 .DS_Store

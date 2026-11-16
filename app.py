@@ -1,6 +1,7 @@
 """Streamlit router and shared Garmin synchronization controls."""
 
 from datetime import date, timedelta
+import json
 
 import streamlit as st
 import plotly.io as pio
@@ -11,6 +12,9 @@ from garmin_dashboard.garmin_client import GarminApiError, GarminClient
 from garmin_dashboard.importer import sync_activities
 from garmin_dashboard.storage import ActivityRepository
 from garmin_dashboard.wellness import sync_wellness
+from garmin_dashboard.health_metrics import health_trend_rows
+from garmin_dashboard.static_export import build_static_export
+from garmin_dashboard.wellness import wellness_metric_points
 
 
 st.set_page_config(page_title="Garmin Training Lab", page_icon="⛰️", layout="wide")
@@ -47,9 +51,23 @@ h1, h2, h3 { letter-spacing: -0.025em; }
 repository = ActivityRepository(DATABASE_PATH)
 repository.initialize()
 activities = repository.list_activities()
+snapshots = repository.list_wellness_snapshots()
 with st.sidebar:
     st.title("Training Lab")
     st.caption(f"{len(activities)} activities stored locally")
+    export = build_static_export(
+        activities,
+        health_trend_rows(wellness_metric_points(snapshots), activities),
+    )
+    st.download_button(
+        "Download data for website",
+        data=json.dumps(export, allow_nan=False, separators=(",", ":")),
+        file_name="garmin-dashboard-export.json",
+        mime="application/json",
+        help="Creates a curated file in your browser download folder. Nothing is uploaded.",
+        disabled=not activities and not snapshots,
+        use_container_width=True,
+    )
     st.divider()
     if st.button("Sync all activities"):
         if not GARMIN_API_KEY:
